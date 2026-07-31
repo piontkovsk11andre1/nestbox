@@ -1,0 +1,10 @@
+{
+    "name": "nestbox/site",
+    "description": "Nestbox containerized website stack — PHP dependencies",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "league/commonmark": "^2.5",
+        "symfony/yaml": "^7.1"
+    }
+}

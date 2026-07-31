@@ -1,0 +1,34 @@
+# Build context hygiene — keep image builds small and reproducible.
+
+# VCS / IDE
+.git
+**/.git
+.gitignore
+.vscode
+.idea
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# npm / Composer caches that may live in the working tree
+node_modules
+vendor
+
+# Page state is local by default and must not leak into image layers. A page
+# that deliberately ships durable data must explicitly revise this policy.
+home/code/**/__data/**
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Bundles are produced inside the build, not pulled from the host.
+home/code/scripts-bundle.js
+home/code/scripts-bundle.css
+
+# Docs and metadata not needed at build time
+README.md
+LICENSE
+tests

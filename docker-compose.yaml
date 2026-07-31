@@ -1,0 +1,139 @@
+# Complete local Nestbox runtime. The installer configures paths, ownership,
+# credentials, and the shared browser port through .env.
+services:
+  # Single browser gateway. The ordinary host serves Nestbox, while agent.*
+  # virtual hosts proxy the internal OpenCode server.
+  nginx:
+    build:
+      context: .
+      dockerfile: ./docker/nginx/Dockerfile
+    depends_on:
+      - php-fpm
+      - opencode
+    ports:
+      # Nestbox and OpenCode share one confirmed host port.
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-4180}:80"
+    expose:
+      # Internal Nchan publisher only; never publish this port on the host.
+      - "8080"
+    volumes:
+      # Nginx only reads pages and generated browser assets.
+      - type: bind
+        source: ${NESTBOX_PAGE_PATH:-./home/code}
+        target: /var/www/html
+        read_only: true
+        bind:
+          create_host_path: false
+      - ./home/configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      # The endpoint passes through PHP, checking both Nginx and PHP-FPM.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/_nestbox/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Executes super-document HTTP and CLI directions. Trusted pages may update
+  # page state and intentionally operate on the mounted workspace.
+  php-fpm:
+    build:
+      context: .
+      dockerfile: ./docker/php-fpm/Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    volumes:
+      # Routers and PHP configuration are source, not writable state.
+      - ./home/configs/php:/sources/php:ro
+      - type: bind
+        source: ${NESTBOX_PAGE_PATH:-./home/code}
+        target: /home/code
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WORKSPACE_PATH:-.}
+        target: /workspace
+        bind:
+          create_host_path: false
+    environment:
+      # Event publication and OpenCode automation stay inside Compose.
+      - NESTBOX_BUS_PUBLISH_URL=http://nginx:8080/_nestbox/publish
+      - NESTBOX_URL_PREFIX=${NESTBOX_URL_PREFIX:-}
+      - NESTBOX_OPENCODE_URL=http://opencode:4096
+      - NESTBOX_OPENCODE_PUBLIC_URL=${NESTBOX_OPENCODE_PUBLIC_URL:-}
+      - OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+    restart: unless-stopped
+
+  # Watches shared browser source and refreshes tracked bundle baselines.
+  # Dependencies are installed in the image, so startup does not need npm ci.
+  rollup:
+    build:
+      context: .
+      dockerfile: ./docker/rollup/Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    working_dir: /sources/rollup
+    command: npm run rollup -- --watch
+    volumes:
+      # Configuration changes are valid agent work but require an image rebuild.
+      - ./home/configs/rollup:/sources/rollup
+      - type: bind
+        source: ${NESTBOX_PAGE_PATH:-./home/code}
+        target: /home/code
+        bind:
+          create_host_path: false
+      # Keep dependencies out of the host page tree.
+      - rollup-node-modules:/sources/rollup/node_modules
+    restart: unless-stopped
+
+  # Internal implementation agent. It can edit Nestbox and the workspace but
+  # deliberately receives no Docker socket or direct host control.
+  opencode:
+    build:
+      context: .
+      dockerfile: ./docker/opencode/Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    env_file:
+      # Provider and OpenCode credentials are supplied to this service.
+      - .env
+    volumes:
+      # Agent and PHP tooling configuration remain read-only at runtime.
+      - ./home/configs/opencode:/etc/opencode:ro
+      - ./home/configs/php:/sources/php:ro
+      # Read-only page view used by PHP tooling inside the agent container.
+      - type: bind
+        source: ${NESTBOX_PAGE_PATH:-./home/code}
+        target: /home/code
+        read_only: true
+        bind:
+          create_host_path: false
+      # Writable installation and stable page-authoring paths.
+      - .:/nestbox
+      - type: bind
+        source: ${NESTBOX_PAGE_PATH:-./home/code}
+        target: /nestbox/home/code
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WORKSPACE_PATH:-.}
+        target: /workspace
+        bind:
+          create_host_path: false
+      # The entrypoint fixes this volume's ownership before dropping privileges.
+      - opencode-data:/home/nestbox/.local/share/opencode
+    working_dir: /workspace
+    environment:
+      - NESTBOX_BUS_PUBLISH_URL=http://nginx:8080/_nestbox/publish
+    restart: unless-stopped
+
+volumes:
+  # Disposable dependency cache reconstructed from package-lock.json.
+  rollup-node-modules:
+  # OpenCode sessions retained across container recreation.
+  opencode-data:
