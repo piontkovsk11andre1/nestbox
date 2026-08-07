@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "create-nestbox": "./bin/create-nestbox.js"
+    "create-nestbox": "bin/create-nestbox.js"
   },
   "files": [
     "bin/",
