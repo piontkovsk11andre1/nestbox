@@ -49,7 +49,12 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Create a Nestbox project.\n\nUsage:\n  npm create @p10i/nestbox@latest [target] [options]\n  npx @p10i/create-nestbox [target] [options]\n\nOptions:\n  --layout current|nestbox  Install directly into target or into target/.nestbox\n  --target <path>          Target directory\n  --yes, -y                Use defaults for missing prompts\n  --no-git                 Do not initialize fresh installation Git history\n  --help, -h               Show this help\n`);
+  console.log(`Create a Nestbox project.\n\nUsage:\n  npm create @p10i/nestbox@latest [workspace] [options]\n  npx @p10i/create-nestbox [workspace] [options]\n\nOptions:\n  --layout nestbox         Create <workspace>/.nestbox (recommended)\n  --layout current         Put Nestbox files directly in <workspace>\n  --target <path>          Workspace directory\n  --yes, -y                Use defaults and skip confirmation\n  --no-git                 Do not initialize fresh installation Git history\n  --help, -h               Show this help\n`);
+}
+
+function printBanner() {
+  console.log('\nNestbox Creator');
+  console.log('Create an agent-guided Docker workspace for project tools and interfaces.\n');
 }
 
 async function pathExists(path) {
@@ -70,7 +75,7 @@ async function isDirectoryEmpty(path) {
 
 function validateLayout(layout) {
   if (layout !== 'current' && layout !== 'nestbox') {
-    throw new Error('Layout must be "current" or "nestbox".');
+    throw new Error('Layout must be "nestbox" or "current".');
   }
 }
 
@@ -79,6 +84,39 @@ async function ask(question, defaultValue, rl, yes) {
   const suffix = defaultValue ? ` (${defaultValue})` : '';
   const answer = (await rl.question(`${question}${suffix}: `)).trim();
   return answer || defaultValue;
+}
+
+async function askLayout(rl, yes) {
+  if (yes) return 'nestbox';
+
+  console.log('Where should Nestbox files go?');
+  console.log('  1. Keep Nestbox in .nestbox (recommended)');
+  console.log('     Creates <workspace>/.nestbox and keeps Nestbox separate from project files.');
+  console.log('  2. Put Nestbox directly in the workspace');
+  console.log('     Writes docker-compose.yaml, docker/, home/, and tests/ into the selected directory.');
+
+  while (true) {
+    const answer = (await rl.question('Choose layout [1]: ')).trim().toLowerCase();
+    if (!answer || answer === '1' || answer === 'nestbox' || answer === '.nestbox') return 'nestbox';
+    if (answer === '2' || answer === 'current' || answer === 'direct') return 'current';
+    console.log('Please choose 1 for .nestbox or 2 for direct install.');
+  }
+}
+
+async function confirmCreation(rl, yes, workspaceDir, installDir, layout) {
+  console.log('\nReview');
+  console.log(`  Workspace:    ${workspaceDir}`);
+  console.log(`  Nestbox files: ${installDir}`);
+  console.log(`  Layout:       ${layout === 'nestbox' ? 'workspace/.nestbox' : 'directly in workspace'}`);
+  console.log('  Creates:      .env, home/configs/opencode/instance.md');
+  console.log('  Does not:     start Docker or collect provider secrets');
+
+  if (yes) return;
+
+  const answer = (await rl.question('\nCreate Nestbox here? [y/N]: ')).trim().toLowerCase();
+  if (answer !== 'y' && answer !== 'yes') {
+    throw new Error('Cancelled. No files were created.');
+  }
 }
 
 async function copyTemplate(installDir) {
@@ -127,13 +165,13 @@ async function configureInstance(installDir, workspaceDir, layout) {
 }
 
 function commandExists(command) {
-  const result = spawnSync(command, ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' });
+  const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
   return result.status === 0;
 }
 
 function initGit(installDir) {
   if (!commandExists('git')) return false;
-  const result = spawnSync('git', ['init'], { cwd: installDir, stdio: 'inherit', shell: process.platform === 'win32' });
+  const result = spawnSync('git', ['init'], { cwd: installDir, stdio: 'inherit' });
   if (result.status !== 0) throw new Error('git init failed.');
   return true;
 }
@@ -147,12 +185,16 @@ async function main() {
 
   const rl = createInterface({ input, output });
   try {
-    const targetInput = options.target || await ask('Target directory', '.', rl, options.yes);
-    const layoutInput = options.layout || await ask('Layout: current or nestbox', 'nestbox', rl, options.yes);
+    printBanner();
+
+    const targetInput = options.target || await ask('Workspace directory', '.', rl, options.yes);
+    const layoutInput = options.layout || await askLayout(rl, options.yes);
     validateLayout(layoutInput);
 
     const workspaceDir = resolve(process.cwd(), targetInput);
     const installDir = layoutInput === 'nestbox' ? join(workspaceDir, '.nestbox') : workspaceDir;
+
+    await confirmCreation(rl, options.yes, workspaceDir, installDir, layoutInput);
 
     if (!(await isDirectoryEmpty(installDir))) {
       throw new Error(`Refusing to overwrite non-empty installation target: ${installDir}`);

@@ -10,7 +10,7 @@ For ordinary new projects, prefer the npm creator:
 npm create @p10i/nestbox@latest
 ```
 
-The published npm package is `@p10i/create-nestbox`; npm maps `npm create @p10i/nestbox` to that package. The creator scaffolds one of the two default layouts, copies `.env.example` to `.env`, copies `home/configs/opencode/instance.example.md` to `instance.md`, records npm package provenance in the instance policy, and initializes fresh installation Git history when Git is available.
+The published npm package is `@p10i/create-nestbox`; npm maps `npm create @p10i/nestbox` to that package. The creator explains and previews one of the two default layouts before writing files. The recommended layout installs at `<workspace>/.nestbox` so Nestbox stays separate from project files. The direct layout writes Nestbox files into an empty selected directory. The creator copies `.env.example` to `.env`, copies `home/configs/opencode/instance.example.md` to `instance.md`, records npm package provenance in the instance policy, and initializes fresh installation Git history when Git is available.
 
 The creator does not start Docker or collect secrets. After it finishes, edit `.env`, then run from the installation directory:
 

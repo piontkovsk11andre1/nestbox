@@ -24,7 +24,7 @@ Create a new Nestbox project with npm:
 npm create @p10i/nestbox@latest
 ```
 
-The creator offers the two default layouts: install directly into the selected directory or install at `<workspace>/.nestbox`. After creation, edit `.env`, then run the Docker Compose validation and startup commands printed by the creator.
+The creator previews the exact paths before it writes files. The recommended layout installs Nestbox at `<workspace>/.nestbox` so Nestbox stays separate from your project files. You can also choose a direct install into an empty directory. After creation, edit `.env`, then run the Docker Compose validation and startup commands printed by the creator.
 
 For agent-guided installation or repair work, copy and send this to an agent with filesystem, Git, Docker, and terminal access:
 
