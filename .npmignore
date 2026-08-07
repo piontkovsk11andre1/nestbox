@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.idea/
+.vscode/
+node_modules/
+vendor/
+
+home/code/**/__data/*
+!home/code/**/__data/.gitignore
+
+.DS_Store
+Thumbs.db
+npm-debug.log*

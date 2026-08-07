@@ -1,0 +1,42 @@
+{
+  "name": "@p10i/create-nestbox",
+  "version": "0.1.0",
+  "description": "Create Nestbox projects.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "create-nestbox": "./bin/create-nestbox.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "docker/",
+    "home/",
+    "tests/",
+    "docker-compose.yaml",
+    ".dockerignore",
+    ".env.example",
+    ".gitattributes",
+    "template.gitignore",
+    "INSTALL.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepack": "node scripts/check-package.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piontkovsk11andre1/nestbox.git"
+  },
+  "bugs": {
+    "url": "https://github.com/piontkovsk11andre1/nestbox/issues"
+  },
+  "homepage": "https://github.com/piontkovsk11andre1/nestbox#readme"
+}

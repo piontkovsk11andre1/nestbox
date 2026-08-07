@@ -18,7 +18,15 @@ Learn about Nestbox from https://github.com/piontkovsk11andre1/nestbox. Read its
 
 ## Installation
 
-Copy and send this to an agent with filesystem, Git, Docker, and terminal access:
+Create a new Nestbox project with npm:
+
+```sh
+npm create @p10i/nestbox@latest
+```
+
+The creator offers the two default layouts: install directly into the selected directory or install at `<workspace>/.nestbox`. After creation, edit `.env`, then run the Docker Compose validation and startup commands printed by the creator.
+
+For agent-guided installation or repair work, copy and send this to an agent with filesystem, Git, Docker, and terminal access:
 
 ```text
 Install Nestbox by following https://github.com/piontkovsk11andre1/nestbox/blob/main/INSTALL.md completely. Ask all required questions before making changes, preserve unrelated files and Git history, and do not expose secrets.
