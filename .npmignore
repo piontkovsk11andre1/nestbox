@@ -8,6 +8,9 @@
 .vscode/
 node_modules/
 vendor/
+.runtime/
+**/__pycache__/
+*.pyc
 
 home/code/**/__data/*
 !home/code/**/__data/.gitignore

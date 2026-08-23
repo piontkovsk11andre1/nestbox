@@ -192,6 +192,74 @@ function nestbox_opencode_request(string $method, string $path, array $body, str
     return json_decode($response, true, flags: JSON_THROW_ON_ERROR);
 }
 
+/** Send a bounded JSON request to the private, label-gated control service. */
+function nestbox_control_request(string $method, string $path, array $body = []): mixed
+{
+    $baseUrl = rtrim((string) getenv('NESTBOX_CONTROL_URL'), '/');
+    if ($baseUrl === '') {
+        throw new RuntimeException('NESTBOX_CONTROL_URL is not configured.');
+    }
+    if (!str_starts_with($path, '/') || preg_match('/[\0\r\n]/', $path)) {
+        throw new InvalidArgumentException('Invalid control request path.');
+    }
+
+    $payload = json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $context = stream_context_create([
+        'http' => [
+            'method' => strtoupper($method),
+            'header' => implode("\r\n", [
+                'Accept: application/json',
+                'Content-Type: application/json',
+                'Content-Length: ' . strlen($payload),
+            ]),
+            'content' => $payload,
+            'ignore_errors' => true,
+            'timeout' => 30,
+        ],
+    ]);
+    $response = @file_get_contents($baseUrl . $path, false, $context, 0, 1024 * 1024);
+    $statusLine = $http_response_header[0] ?? '';
+    preg_match('#^HTTP/\S+\s+(\d{3})#', $statusLine, $matches);
+    $status = isset($matches[1]) ? (int) $matches[1] : 0;
+    if ($response === false || $status < 200 || $status >= 300) {
+        throw new RuntimeException("Control request failed with HTTP status $status.");
+    }
+    return $response === '' ? null : json_decode($response, true, flags: JSON_THROW_ON_ERROR);
+}
+
+/** Execute one explicit argument array in an allowed Compose service. */
+function nestbox_control_exec(
+    string $service,
+    string $workdir,
+    array $command,
+    bool $detach = false,
+    string $user = '',
+): array {
+    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/', $service)) {
+        throw new InvalidArgumentException('Invalid control target service.');
+    }
+    if (!str_starts_with($workdir, '/') || str_contains($workdir, "\0")) {
+        throw new InvalidArgumentException('Control workdir must be an absolute container path.');
+    }
+    if ($command === [] || count($command) > 256) {
+        throw new InvalidArgumentException('Control command must be a non-empty bounded argument array.');
+    }
+    foreach ($command as $part) {
+        if (!is_string($part) || str_contains($part, "\0")) {
+            throw new InvalidArgumentException('Every control command argument must be a string.');
+        }
+    }
+    $body = ['command' => array_values($command), 'workdir' => $workdir, 'detach' => $detach];
+    if ($user !== '') {
+        $body['user'] = $user;
+    }
+    $result = nestbox_control_request('POST', '/containers/' . rawurlencode($service) . '/exec', $body);
+    if (!is_array($result) || !isset($result['runId']) || !is_string($result['runId'])) {
+        throw new RuntimeException('Control service returned an invalid exec response.');
+    }
+    return $result;
+}
+
 /** Create an OpenCode session synchronously so its ID is available immediately. */
 function nestbox_opencode_create_session(string $title, string $directory = '/workspace'): array
 {

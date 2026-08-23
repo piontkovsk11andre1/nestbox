@@ -15,6 +15,9 @@
 # npm / Composer caches that may live in the working tree
 node_modules
 vendor
+.runtime
+**/__pycache__
+*.pyc
 
 # Page state is local by default and must not leak into image layers. A page
 # that deliberately ships durable data must explicitly revise this policy.

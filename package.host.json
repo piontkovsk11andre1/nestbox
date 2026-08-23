@@ -1,0 +1,8 @@
+{
+  "name": "nestbox-workspace",
+  "private": true,
+  "scripts": {
+    "host": "node .nestbox/host-runner.mjs",
+    "test:host": "node .nestbox/tests/host-runner.mjs"
+  }
+}

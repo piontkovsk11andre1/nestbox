@@ -5,6 +5,17 @@
     "port": 4096
   },
   "instructions": ["instructions.md", "instance.md"],
+  "mcp": {
+    "control": {
+      "type": "local",
+      "command": ["node", "/etc/opencode/control-mcp.js"],
+      "enabled": true,
+      "environment": {
+        "NESTBOX_CONTROL_URL": "{env:NESTBOX_CONTROL_URL}",
+        "NESTBOX_CONTROL_TIMEOUT_MS": "30000"
+      }
+    }
+  },
   "permission": {
     "external_directory": {
       "*": "ask",

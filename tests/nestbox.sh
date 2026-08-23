@@ -141,6 +141,11 @@ else
 fi
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nestbox-test.XXXXXX")"
+configured_queue="$(sed -n 's/^NESTBOX_HOST_QUEUE_PATH=//p' "$ROOT/.env" | tail -n 1)"
+if [[ -z "${NESTBOX_HOST_QUEUE_PATH:-}" && -z "$configured_queue" ]]; then
+    export NESTBOX_HOST_QUEUE_PATH="$TEMP_DIR/host-runner"
+fi
+if [[ -n "${NESTBOX_HOST_QUEUE_PATH:-}" ]]; then mkdir -p "$NESTBOX_HOST_QUEUE_PATH"; fi
 
 [[ -f "$ROOT/.env" ]] && pass '.env exists' || fail '.env is missing'
 [[ ! -d "$ROOT/home/.git" ]] && pass 'Page and configuration tree has no embedded Git repository' || fail 'home/.git must not be included in an installation'
@@ -160,6 +165,8 @@ grep -Fq 'deliberately has no Docker socket' "$ROOT/home/configs/opencode/instru
 grep -Fq 'Commit policy:' "$ROOT/home/configs/opencode/instance.md" && pass 'OpenCode instance policy records commit behavior' || fail 'OpenCode instance policy omits commit behavior'
 grep -Fq 'Communication language:' "$ROOT/home/configs/opencode/instance.md" && pass 'OpenCode instance policy records communication language' || fail 'OpenCode instance policy omits communication language'
 grep -Fq '"instance.md"' "$ROOT/home/configs/opencode/opencode.json" && pass 'OpenCode loads instance policy directly' || fail 'OpenCode does not load instance policy'
+grep -Fq '"control"' "$ROOT/home/configs/opencode/opencode.json" && pass 'OpenCode registers the control MCP' || fail 'OpenCode does not register the control MCP'
+[[ -f "$ROOT/docker/control/server.py" && -f "$ROOT/host-runner.mjs" ]] && pass 'Control and host runner sources exist' || fail 'Control or host runner source is missing'
 
 if compose config --quiet; then
     pass 'Compose configuration is valid'
@@ -168,7 +175,7 @@ else
 fi
 
 services="$(compose config --services 2>/dev/null || true)"
-for service in nginx php-fpm rollup opencode; do
+for service in nginx php-fpm rollup control opencode; do
     if grep -qx "$service" <<<"$services"; then
         pass "Compose defines $service"
     else
@@ -184,7 +191,7 @@ while IFS= read -r service; do
 done <<<"$running_services"
 
 if ((START)); then
-    if compose build nginx php-fpm rollup opencode; then
+    if compose build nginx php-fpm rollup control opencode; then
         pass 'All service images build'
     else
         fail 'One or more service images failed to build'
@@ -193,14 +200,14 @@ if ((START)); then
     # The Rollup watcher intentionally writes generated bundles to the bind
     # mount, so lifecycle mode leaves it untouched and validates its image via
     # the build plus the bundles served by Nginx.
-    if compose up -d nginx php-fpm opencode; then
+    if compose up -d nginx php-fpm control opencode; then
         pass 'Application services started'
     else
         fail 'Application services failed to start'
     fi
 fi
 
-for service in nginx php-fpm opencode; do
+for service in nginx php-fpm control opencode; do
     if container_running "$service"; then
         pass "$service is running"
     else
@@ -217,6 +224,7 @@ fi
 NGINX_RESTARTS="$(restart_count nginx 2>/dev/null || printf '')"
 PHP_RESTARTS="$(restart_count php-fpm 2>/dev/null || printf '')"
 OPENCODE_RESTARTS="$(restart_count opencode 2>/dev/null || printf '')"
+CONTROL_RESTARTS="$(restart_count control 2>/dev/null || printf '')"
 
 published="$(compose port nginx 80 2>/dev/null || true)"
 if [[ "$published" =~ ^\[(.*)\]:([0-9]+)$ ]]; then
@@ -339,6 +347,15 @@ fi
 status="$(http_request '/_nestbox/publish?topics=nestbox-test:public' '' 'POST' 2>/dev/null || printf '000')"
 [[ "$status" == "404" ]] && pass 'Publisher endpoint is unavailable on the public port' || fail "Public publisher endpoint returned HTTP $status"
 
+control_id="$(container_id control)"
+control_binding="$(docker inspect --format '{{json (index .NetworkSettings.Ports "4088/tcp")}}' "$control_id" 2>/dev/null || true)"
+[[ -z "$control_binding" || "$control_binding" == "null" ]] && pass 'Control API is not published on the host' || fail 'Control API is published on the host'
+opencode_id="$(container_id opencode)"
+opencode_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' "$opencode_id" 2>/dev/null || true)"
+grep -Fq '/var/run/docker.sock' <<<"$opencode_mounts" && fail 'OpenCode receives the Docker socket' || pass 'OpenCode does not receive the Docker socket'
+control_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' "$control_id" 2>/dev/null || true)"
+grep -Fq '/var/run/docker.sock' <<<"$control_mounts" && pass 'Control receives the Docker socket' || fail 'Control does not receive the Docker socket'
+
 if ((INDEX_PRESENT)); then
     if compose exec -T php-fpm php -l /home/code/index.php >/dev/null 2>&1; then
         pass 'Installed super-document passes PHP lint'
@@ -423,7 +440,7 @@ else
     fail 'EventSource did not receive the expected Nchan event'
 fi
 
-for entry in "nginx:$NGINX_RESTARTS" "php-fpm:$PHP_RESTARTS" "opencode:$OPENCODE_RESTARTS"; do
+for entry in "nginx:$NGINX_RESTARTS" "php-fpm:$PHP_RESTARTS" "control:$CONTROL_RESTARTS" "opencode:$OPENCODE_RESTARTS"; do
     service="${entry%%:*}"
     before="${entry#*:}"
     after="$(restart_count "$service" 2>/dev/null || printf '')"

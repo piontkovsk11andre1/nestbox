@@ -12,7 +12,7 @@ npm create @p10i/nestbox@latest
 
 The published npm package is `@p10i/create-nestbox`; npm maps `npm create @p10i/nestbox` to that package. The creator explains and previews one of the two default layouts before writing files. The recommended layout installs at `<workspace>/.nestbox` so Nestbox stays separate from project files. The direct layout writes Nestbox files into an empty selected directory. The creator copies `.env.example` to `.env`, copies `home/configs/opencode/instance.example.md` to `instance.md`, records npm package provenance in the instance policy, and initializes fresh installation Git history when Git is available.
 
-The creator does not start Docker or collect secrets. After it finishes, edit `.env`, then run from the installation directory:
+The creator does not start Docker, start the host bridge, or collect secrets. Node.js and npm are required for the bridge. After it finishes, edit `.env`, run `npm run host --` from the workspace in a separate terminal, then run from the installation directory:
 
 ```sh
 docker compose config --quiet
@@ -54,7 +54,7 @@ docker version
 docker compose version
 ```
 
-Nestbox requires Git, a running Docker Engine, and Docker Compose v2. If something is missing, explain the platform-specific requirement and pause. Do not install system software without approval.
+Nestbox requires Git, Node.js with npm, a running Docker Engine, and Docker Compose v2. If something is missing, explain the platform-specific requirement and pause. Do not install system software without approval.
 
 Inspect Git status for the selected directory and installation target before changing files. Preserve unrelated changes. The fresh Nestbox repository remains independent in both default layouts, including when `.nestbox` is nested inside another Git workspace.
 
@@ -93,6 +93,15 @@ Copy `.env.example` to `.env` and `home/configs/opencode/instance.example.md` to
 | `<workspace>/.nestbox` | `..` |
 
 Relative bind paths resolve from the installation directory. The page tree is mounted as `/home/code` in runtime services and as the writable `/nestbox/home/code` agent path. `WORKSPACE_PATH` is mounted as `/workspace` in PHP and OpenCode. `NESTBOX_PAGE_PATH` remains an optional advanced override for a user-requested external page tree.
+
+Configure the host bridge in the workspace root before Compose starts:
+
+- For `.nestbox` layout, create `package.json` from `.nestbox/package.host.json` when absent, or merge only its `host` and `test:host` scripts into the existing manifest.
+- For direct layout, use `node host-runner.mjs` and `node tests/host-runner.mjs` for those scripts. A source clone's publisher-oriented `package.json` may be replaced by this installation manifest after preserving any intentional project metadata.
+- Never overwrite a conflicting script. Stop and ask for a different script name or an explicit migration.
+- Create a private host-state queue outside the workspace, record it in the ignored installation `.runtime/host-runner.json`, and set its absolute path as `NESTBOX_HOST_QUEUE_PATH` in `.env`. The npm creator performs this automatically.
+- Start `npm run host --` before Compose so the queue and heartbeat exist. The runner rejects queue locations inside the mounted workspace.
+- The workspace manifest is mounted read-only in runtime containers. Confirmed changes are written only by the native host runner.
 
 Update the new `home/configs/opencode/instance.md` with:
 
@@ -143,6 +152,12 @@ docker compose ps
 docker compose port nginx 80
 ```
 
+In a separate terminal, keep the bridge running from the workspace root:
+
+```sh
+npm run host --
+```
+
 Verify:
 
 - `/` retains HTTP 404 and renders the OpenCode implementation form;
@@ -150,6 +165,7 @@ Verify:
 - `php /sources/php/cli.php __templates/super-document` is rejected;
 - `/Agent` redirects to OpenCode on the same published port;
 - the actual OpenCode URL works in the user's client;
+- `npm run test:host` passes and control health reports the host runner as available;
 - a provider and model are available for agent work, without printing credentials or sending a billable prompt unless the user approves it;
 - `/_nestbox/health` returns HTTP 200;
 - a transient PHP event reaches an EventSource subscriber through Nchan;
@@ -227,7 +243,7 @@ Send this work to the internal OpenCode agent. A useful prompt is:
 Extend this Nestbox installation for the following requirement: <request>. Inspect /workspace and /nestbox, follow the internal Nestbox manual, implement and verify all file changes you can, and report the exact host-side activation command for any container or infrastructure change.
 ```
 
-The internal agent edits pages and infrastructure definitions. It has no Docker socket and must not claim host activation. The external maintainer resumes only to inspect the proposed infrastructure files, run `docker compose config`, apply the narrowest build or recreate operation, and verify health.
+The internal agent edits pages and infrastructure definitions. It has no Docker socket. It may use only the label-gated control MCP for approved container commands and declared host npm scripts; broader activation remains an external-maintainer task.
 
 ## 10. Git And Generated State
 

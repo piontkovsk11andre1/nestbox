@@ -91,6 +91,9 @@ function Invoke-Http([string]$Path, [string]$HostHeader = '', [string]$Method = 
 
 try {
     New-Item -ItemType Directory -Path $TempDirectory | Out-Null
+    $configuredQueue = [regex]::Match([IO.File]::ReadAllText((Join-Path $Root '.env')), '(?m)^NESTBOX_HOST_QUEUE_PATH=(.+)$').Groups[1].Value.Trim()
+    if (-not $env:NESTBOX_HOST_QUEUE_PATH -and -not $configuredQueue) { $env:NESTBOX_HOST_QUEUE_PATH = Join-Path $TempDirectory 'host-runner' }
+    if ($env:NESTBOX_HOST_QUEUE_PATH) { New-Item -ItemType Directory -Path $env:NESTBOX_HOST_QUEUE_PATH -Force | Out-Null }
 
     if (Get-Command docker -ErrorAction SilentlyContinue) { Pass 'docker is available' } else { Fail 'docker is required'; throw 'Missing Docker' }
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) { Pass 'curl.exe is available' } else { Fail 'curl.exe is required'; throw 'Missing curl.exe' }
@@ -120,13 +123,15 @@ try {
     if ($openCodeInstance.Contains('Communication language:')) { Pass 'OpenCode instance policy records communication language' } else { Fail 'OpenCode instance policy omits communication language' }
     $openCodeConfig = [IO.File]::ReadAllText((Join-Path $Root 'home\configs\opencode\opencode.json'))
     if ($openCodeConfig.Contains('"instance.md"')) { Pass 'OpenCode loads instance policy directly' } else { Fail 'OpenCode does not load instance policy' }
+    if ($openCodeConfig.Contains('"control"')) { Pass 'OpenCode registers the control MCP' } else { Fail 'OpenCode does not register the control MCP' }
+    if ((Test-Path -LiteralPath (Join-Path $Root 'docker\control\server.py')) -and (Test-Path -LiteralPath (Join-Path $Root 'host-runner.mjs'))) { Pass 'Control and host runner sources exist' } else { Fail 'Control or host runner source is missing' }
 
     $result = Invoke-Compose @('config', '--quiet') -Quiet
     if ($result.Code -eq 0) { Pass 'Compose configuration is valid' } else { Fail 'Compose configuration is invalid' }
 
     $result = Invoke-Compose @('config', '--services') -Quiet
     $services = @($result.Output | ForEach-Object { $_.ToString().Trim() })
-    foreach ($service in @('nginx', 'php-fpm', 'rollup', 'opencode')) {
+    foreach ($service in @('nginx', 'php-fpm', 'rollup', 'control', 'opencode')) {
         if ($services -contains $service) { Pass "Compose defines $service" } else { Fail "Compose does not define $service" }
     }
     $result = Invoke-Compose @('ps', '--services') -Quiet
@@ -135,16 +140,16 @@ try {
     }
 
     if ($Start) {
-        $result = Invoke-Compose @('build', 'nginx', 'php-fpm', 'rollup', 'opencode')
+        $result = Invoke-Compose @('build', 'nginx', 'php-fpm', 'rollup', 'control', 'opencode')
         if ($result.Code -eq 0) { Pass 'All service images build' } else { Fail 'One or more service images failed to build' }
 
         # Do not start the bind-mounted Rollup watcher: it intentionally writes
         # generated bundles. Its image and output are validated separately.
-        $result = Invoke-Compose @('up', '-d', 'nginx', 'php-fpm', 'opencode')
+        $result = Invoke-Compose @('up', '-d', 'nginx', 'php-fpm', 'control', 'opencode')
         if ($result.Code -eq 0) { Pass 'Application services started' } else { Fail 'Application services failed to start' }
     }
 
-    foreach ($service in @('nginx', 'php-fpm', 'opencode')) {
+    foreach ($service in @('nginx', 'php-fpm', 'control', 'opencode')) {
         if (Test-ContainerRunning $service) { Pass "$service is running" } else { Fail "$service is not running" }
     }
     $rollupId = Get-ContainerId 'rollup'
@@ -155,7 +160,7 @@ try {
     }
 
     $restartCounts = @{}
-    foreach ($service in @('nginx', 'php-fpm', 'opencode')) { $restartCounts[$service] = Get-RestartCount $service }
+    foreach ($service in @('nginx', 'php-fpm', 'control', 'opencode')) { $restartCounts[$service] = Get-RestartCount $service }
 
     $result = Invoke-Compose @('port', 'nginx', '80') -Quiet
     $published = ($result.Output -join "`n").Trim()
@@ -242,6 +247,14 @@ try {
     $response = Invoke-Http '/_nestbox/publish?topics=nestbox-test:public' '' 'POST'
     if ($response.Status -eq 404) { Pass 'Publisher endpoint is unavailable on the public port' } else { Fail "Public publisher endpoint returned HTTP $($response.Status)" }
 
+    $controlId = Get-ContainerId 'control'
+    $controlInspect = @(& docker inspect $controlId 2>$null | ConvertFrom-Json)[0]
+    if ($null -eq $controlInspect.NetworkSettings.Ports.'4088/tcp') { Pass 'Control API is not published on the host' } else { Fail 'Control API is published on the host' }
+    $openCodeId = Get-ContainerId 'opencode'
+    $openCodeInspect = @(& docker inspect $openCodeId 2>$null | ConvertFrom-Json)[0]
+    if (@($openCodeInspect.Mounts.Destination) -notcontains '/var/run/docker.sock') { Pass 'OpenCode does not receive the Docker socket' } else { Fail 'OpenCode receives the Docker socket' }
+    if (@($controlInspect.Mounts.Destination) -contains '/var/run/docker.sock') { Pass 'Control receives the Docker socket' } else { Fail 'Control does not receive the Docker socket' }
+
     if ($indexPresent) {
         $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-l', '/home/code/index.php') -Quiet
         if ($result.Code -eq 0) { Pass 'Installed super-document passes PHP lint' } else { Fail 'Installed super-document failed PHP lint' }
@@ -299,7 +312,7 @@ try {
     Remove-Job -Job $SseJob -Force -ErrorAction SilentlyContinue
     $SseJob = $null
 
-    foreach ($service in @('nginx', 'php-fpm', 'opencode')) {
+    foreach ($service in @('nginx', 'php-fpm', 'control', 'opencode')) {
         $after = Get-RestartCount $service
         if ((Test-ContainerRunning $service) -and $null -ne $restartCounts[$service] -and $restartCounts[$service] -eq $after) { Pass "$service remained stable during the test" } else { Fail "$service restarted or stopped during the test" }
     }

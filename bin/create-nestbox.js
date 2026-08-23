@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { dirname, join, resolve } from 'node:path';
@@ -14,12 +16,15 @@ const copyEntries = [
   'docker',
   'home',
   'tests',
+  'host-runner.mjs',
+  'package.host.json',
   'docker-compose.yaml',
   '.dockerignore',
   '.env.example',
   '.gitattributes',
   'INSTALL.md',
   'README.md',
+  'CHANGELOG.md',
   'LICENSE'
 ];
 
@@ -140,6 +145,10 @@ async function configureInstance(installDir, workspaceDir, layout) {
     errorOnExist: true,
     force: false
   });
+  const envPath = join(installDir, '.env');
+  const workspaceValue = layout === 'nestbox' ? '..' : '.';
+  const configuredEnv = (await readFile(envPath, 'utf8')).replace(/^WORKSPACE_PATH=.*$/m, `WORKSPACE_PATH=${workspaceValue}`);
+  await writeFile(envPath, configuredEnv, 'utf8');
 
   const instanceExample = join(installDir, 'home', 'configs', 'opencode', 'instance.example.md');
   const instancePath = join(installDir, 'home', 'configs', 'opencode', 'instance.md');
@@ -162,6 +171,70 @@ async function configureInstance(installDir, workspaceDir, layout) {
   instance += `\n\n- Host installation path: ${installDir}\n- Host workspace path: ${workspaceDir}\n`;
 
   await writeFile(instancePath, instance, 'utf8');
+}
+
+function hostScripts(layout) {
+  const prefix = layout === 'nestbox' ? '.nestbox/' : '';
+  return {
+    host: `node ${prefix}host-runner.mjs`,
+    'test:host': `node ${prefix}tests/host-runner.mjs`
+  };
+}
+
+async function readWorkspacePackage(workspaceDir) {
+  const path = join(workspaceDir, 'package.json');
+  if (!(await pathExists(path))) return null;
+  let document;
+  try {
+    document = JSON.parse(await readFile(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`Cannot use workspace package.json: ${error.message}`);
+  }
+  if (!document || typeof document !== 'object' || Array.isArray(document)) {
+    throw new Error('Workspace package.json must contain a JSON object.');
+  }
+  if (document.scripts !== undefined && (!document.scripts || typeof document.scripts !== 'object' || Array.isArray(document.scripts))) {
+    throw new Error('Workspace package.json scripts must be an object.');
+  }
+  return document;
+}
+
+async function preflightHostPackage(workspaceDir, layout) {
+  const document = await readWorkspacePackage(workspaceDir);
+  if (!document) return;
+  for (const [name, command] of Object.entries(hostScripts(layout))) {
+    if (document.scripts?.[name] !== undefined && document.scripts[name] !== command) {
+      throw new Error(`Refusing to overwrite existing workspace npm script: ${name}`);
+    }
+  }
+}
+
+async function configureHostPackage(installDir, workspaceDir, layout) {
+  const scripts = hostScripts(layout);
+  const document = await readWorkspacePackage(workspaceDir) || {
+    name: 'nestbox-workspace',
+    private: true
+  };
+  document.scripts = { ...(document.scripts || {}), ...scripts };
+  await writeFile(join(workspaceDir, 'package.json'), `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+  await writeFile(join(installDir, 'package.host.json'), `${JSON.stringify({
+    name: 'nestbox-workspace',
+    private: true,
+    scripts
+  }, null, 2)}\n`, 'utf8');
+  const stateBase = process.env.NESTBOX_CREATOR_STATE_ROOT
+    || process.env.LOCALAPPDATA
+    || process.env.XDG_STATE_HOME
+    || (process.platform === 'darwin' ? join(homedir(), 'Library', 'Application Support') : join(homedir(), '.local', 'state'));
+  const queue = join(stateBase, 'nestbox', 'host-runner', randomUUID());
+  await mkdir(queue, { recursive: true });
+  const runtime = join(installDir, '.runtime');
+  await mkdir(runtime, { recursive: true });
+  await writeFile(join(runtime, 'host-runner.json'), `${JSON.stringify({ queue }, null, 2)}\n`, 'utf8');
+  const envPath = join(installDir, '.env');
+  const composeQueue = queue.replaceAll('\\', '/');
+  const configuredEnv = (await readFile(envPath, 'utf8')).replace(/^NESTBOX_HOST_QUEUE_PATH=.*$/m, () => `NESTBOX_HOST_QUEUE_PATH=${composeQueue}`);
+  await writeFile(envPath, configuredEnv, 'utf8');
 }
 
 function commandExists(command) {
@@ -200,9 +273,12 @@ async function main() {
       throw new Error(`Refusing to overwrite non-empty installation target: ${installDir}`);
     }
 
+    await preflightHostPackage(workspaceDir, layoutInput);
+
     await mkdir(installDir, { recursive: true });
     await copyTemplate(installDir);
     await configureInstance(installDir, workspaceDir, layoutInput);
+    await configureHostPackage(installDir, workspaceDir, layoutInput);
     const gitInitialized = options.git ? initGit(installDir) : false;
 
     console.log('\nNestbox project created.');
@@ -210,6 +286,8 @@ async function main() {
     console.log(`Workspace: ${workspaceDir}`);
     console.log(`Git initialized: ${gitInitialized ? 'yes' : 'no'}`);
     console.log('\nNext steps:');
+    console.log(`  cd ${workspaceDir}`);
+    console.log('  npm run host --');
     console.log(`  cd ${installDir}`);
     console.log('  Edit .env and set COMPOSE_PROJECT_NAME, WEB_PORT, OpenCode credentials, and provider keys.');
     console.log('  docker compose config --quiet');

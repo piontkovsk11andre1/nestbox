@@ -10,7 +10,7 @@ FROM ghcr.io/anomalyco/opencode:latest
 ARG APP_UID=1000
 ARG APP_GID=1000
 
-RUN apk add --no-cache git php85 php85-dom php85-mbstring php85-openssl php85-phar php85-tokenizer php85-xml php85-xmlwriter su-exec && \
+RUN apk add --no-cache git nodejs php85 php85-dom php85-mbstring php85-openssl php85-phar php85-tokenizer php85-xml php85-xmlwriter su-exec && \
     ln -s /usr/bin/php85 /usr/local/bin/php && \
     addgroup -g "${APP_GID}" -S nestbox && \
     adduser -u "${APP_UID}" -G nestbox -S -h /home/nestbox nestbox

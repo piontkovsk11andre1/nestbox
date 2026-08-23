@@ -168,6 +168,20 @@ The interactive 404 page demonstrates the intended flow: create a session scoped
 
 Use API-created sessions only for explicit page workflows. The shared header's Open Chat link remains the normal entry point for conversation.
 
+## Container Control API
+
+OpenCode has no Docker socket. Use the control MCP as the only path for commands in other containers or on the native host:
+
+- `docker_exec` accepts an allowed Compose `machine`, absolute `workdir`, positional `command` array, and optional `user` or `detach` value.
+- `npm_scripts` lists scripts from `/workspace/package.json`.
+- `npm_run` executes one declared script through the active native host runner. Prefer `detach: true` for work expected to exceed the MCP request timeout.
+- `npm_script_change_request` requests an add, edit, or delete. The confirmation code appears only in the host runner terminal.
+- `npm_script_change_confirm` applies the pending change after the user explicitly supplies that code.
+
+Do not call the control HTTP API directly from OpenCode, write queue files, invoke Docker or SSH as a substitute, or work around a missing MCP capability. PHP cannot invoke MCP, so trusted super-documents may use `nestbox_control_exec()`; default labels restrict PHP-FPM to self-exec. Only OpenCode has `nestbox.npm.allow=true` by default. Root exec requires an explicit target label.
+
+The control log is the audit source of truth and requires no observability service. Its host queue stays outside container-mounted workspace paths. Commands still operate in trusted containers and a trusted writable workspace; Docker socket access and editable host-script source mean this is a controlled capability, not a security sandbox.
+
 ## Git And Commit Policy
 
 - Resolve the owning Git root before staging any path.
@@ -182,12 +196,13 @@ Use API-created sessions only for explicit page workflows. The shared header's O
 
 ## Container Architecture
 
-The default Compose application has four services:
+The default Compose application has five services:
 
 - `nginx`: the only host-published gateway. It serves static page files, routes super-documents to PHP-FPM, proxies the OpenCode virtual host, and hosts Nchan.
 - `php-fpm`: executes HTTP and CLI directions. It mounts the page tree and workspace writable because trusted pages may intentionally modify them.
 - `rollup`: watches `scripts.js` and browser dependencies and writes local JS/CSS bundles into the page tree.
 - `opencode`: runs this agent, mounts the engine and workspace, and edits the page tree through `/nestbox/home/code`.
+- `control`: owns the Docker socket and privately brokers label-gated container exec and host-runner jobs.
 
 The default host port is `4180` after installer confirmation. Nginx container port `80` serves both Nestbox and OpenCode through host-based routing. Nginx container port `8080` is only the internal Nchan publisher.
 
@@ -214,6 +229,7 @@ The engine's untracked `/nestbox/.env` controls runtime paths, exposure, authent
 - `APP_UID` and `APP_GID`: PHP-FPM ownership for writable bind mounts.
 - `NESTBOX_URL_PREFIX`: public path prefix when an outer proxy strips that prefix before forwarding.
 - `NESTBOX_OPENCODE_PUBLIC_URL`: explicit public OpenCode origin when `agent.<nestbox-host>` cannot be derived.
+- `NESTBOX_CONTROL_URL`: internal control API URL, normally `http://control:4088`.
 - `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD`: OpenCode HTTP authentication shared with PHP's internal API client.
 
 Nginx publishes one host port and distinguishes two browser origins:
@@ -271,13 +287,13 @@ Mount every directory needed by both PHP and OpenCode at the same container path
 
 ## Container Boundary And Host Handoff
 
-This OpenCode container deliberately has no Docker socket and may not be able to run Docker CLI commands. Never claim to build, pull, start, stop, restart, recreate, inspect, or remove host containers from this session.
+This OpenCode container deliberately has no Docker socket. Use control MCP only for its declared, label-gated operations. Never claim a broader Docker or operating-system capability.
 
 You may edit Compose files, Dockerfiles, Nginx configuration, PHP configuration, dependency files, mount definitions, and OpenCode configuration. After an infrastructure edit:
 
 1. Validate every part that can be checked inside this container.
 2. Identify the exact affected services.
-3. Give the user the narrowest host-side command to run from the engine directory.
+3. Use a declared host npm script through MCP when one exists; otherwise give the user the narrowest host-side command.
 4. State that activation and host health checks remain pending.
 5. Tell the user to reconnect if OpenCode itself must restart.
 
