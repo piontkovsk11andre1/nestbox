@@ -141,11 +141,8 @@ else
 fi
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nestbox-test.XXXXXX")"
-configured_queue="$(sed -n 's/^NESTBOX_HOST_QUEUE_PATH=//p' "$ROOT/.env" | tail -n 1)"
-if [[ -z "${NESTBOX_HOST_QUEUE_PATH:-}" && -z "$configured_queue" ]]; then
-    export NESTBOX_HOST_QUEUE_PATH="$TEMP_DIR/host-runner"
-fi
-if [[ -n "${NESTBOX_HOST_QUEUE_PATH:-}" ]]; then mkdir -p "$NESTBOX_HOST_QUEUE_PATH"; fi
+configured_token_file="$(sed -n 's/^NESTBOX_HOST_TOKEN_FILE=//p' "$ROOT/.env" | tail -n 1)"
+if [[ -z "${NESTBOX_HOST_TOKEN_FILE:-}" && -z "$configured_token_file" ]]; then export NESTBOX_HOST_TOKEN_FILE="$TEMP_DIR/host-token"; printf 'test-token-%054d\n' 0 >"$NESTBOX_HOST_TOKEN_FILE"; fi
 
 [[ -f "$ROOT/.env" ]] && pass '.env exists' || fail '.env is missing'
 [[ ! -d "$ROOT/home/.git" ]] && pass 'Page and configuration tree has no embedded Git repository' || fail 'home/.git must not be included in an installation'
@@ -350,11 +347,16 @@ status="$(http_request '/_nestbox/publish?topics=nestbox-test:public' '' 'POST' 
 control_id="$(container_id control)"
 control_binding="$(docker inspect --format '{{json (index .NetworkSettings.Ports "4088/tcp")}}' "$control_id" 2>/dev/null || true)"
 [[ -z "$control_binding" || "$control_binding" == "null" ]] && pass 'Control API is not published on the host' || fail 'Control API is published on the host'
+runner_binding="$(docker inspect --format '{{json (index .NetworkSettings.Ports "4089/tcp")}}' "$control_id" 2>/dev/null || true)"
+if [[ "$runner_binding" == *'"HostIp":"127.0.0.1"'* || "$runner_binding" == *'"HostIp":"::1"'* ]]; then pass 'Host runner API is published on loopback only'; else fail 'Host runner API is not restricted to loopback'; fi
 opencode_id="$(container_id opencode)"
 opencode_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' "$opencode_id" 2>/dev/null || true)"
 grep -Fq '/var/run/docker.sock' <<<"$opencode_mounts" && fail 'OpenCode receives the Docker socket' || pass 'OpenCode does not receive the Docker socket'
+opencode_env="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$opencode_id" 2>/dev/null || true)"
+if ! grep -Fq '/run/secrets/nestbox-host-token' <<<"$opencode_mounts" && ! grep -Eq '^NESTBOX_HOST_TOKEN=' <<<"$opencode_env"; then pass 'OpenCode cannot read the host runner token'; else fail 'OpenCode can read the host runner token'; fi
 control_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' "$control_id" 2>/dev/null || true)"
 grep -Fq '/var/run/docker.sock' <<<"$control_mounts" && pass 'Control receives the Docker socket' || fail 'Control does not receive the Docker socket'
+grep -Fq '/run/secrets/nestbox-host-token' <<<"$control_mounts" && pass 'Control receives the host runner token file' || fail 'Control does not receive the host runner token file'
 
 if ((INDEX_PRESENT)); then
     if compose exec -T php-fpm php -l /home/code/index.php >/dev/null 2>&1; then

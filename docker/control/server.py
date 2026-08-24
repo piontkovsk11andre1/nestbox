@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import http.client
+import hmac
 import json
 import os
 import re
@@ -10,16 +11,24 @@ import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
 WORKSPACE_PATH = os.environ.get("WORKSPACE_PATH", "/workspace")
 PROJECT_NAME = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
 SERVICE_NAME = os.environ.get("NESTBOX_CONTROL_SERVICE", "control")
-HOST_ROOT = os.environ.get("NESTBOX_HOST_RUNNER_PATH", "/host-runner")
+HOST_TOKEN_FILE = os.environ.get("NESTBOX_HOST_TOKEN_FILE", "/run/secrets/nestbox-host-token")
+try:
+    with open(HOST_TOKEN_FILE, encoding="utf-8") as token_stream:
+        HOST_TOKEN = token_stream.read().strip()
+except OSError:
+    HOST_TOKEN = ""
 HOST_TIMEOUT = int(os.environ.get("NESTBOX_HOST_RUNNER_TIMEOUT", "3600"))
-HOST_HEARTBEAT_TTL = int(os.environ.get("NESTBOX_HOST_RUNNER_HEARTBEAT_TTL", "5"))
+HOST_HEARTBEAT_TTL = int(os.environ.get("NESTBOX_HOST_RUNNER_HEARTBEAT_TTL", "10"))
+HOST_LONG_POLL_TIMEOUT = int(os.environ.get("NESTBOX_HOST_LONG_POLL_TIMEOUT", "25"))
+MAX_HOST_JOBS = int(os.environ.get("NESTBOX_MAX_HOST_JOBS", "100"))
 MAX_BODY_BYTES = 128 * 1024
+MAX_HOST_BODY_BYTES = 64 * 1024 * 1024
 MAX_COMMAND_PARTS = 256
 MAX_COMMAND_BYTES = 64 * 1024
 LOG_OUTPUT = os.environ.get("NESTBOX_CONTROL_LOG_OUTPUT", "text").lower()
@@ -191,51 +200,155 @@ def package_scripts():
     return {str(name): str(command) for name, command in scripts.items()}
 
 
-def host_paths():
-    return {name: os.path.join(HOST_ROOT, name) for name in ("requests", "results", "heartbeat")}
+class HostBroker:
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.pending = []
+        self.jobs = {}
+        self.runner = {}
+
+    def touch(self, runner_id, headers):
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", runner_id):
+            raise ValueError("invalid runner ID")
+        now = time.monotonic()
+        with self.condition:
+            active_id = self.runner.get("id")
+            active_age = now - self.runner.get("seen", 0)
+            if active_id and active_id != runner_id and active_age <= HOST_HEARTBEAT_TTL:
+                raise PermissionError("another host runner is active")
+            if active_id and active_id != runner_id:
+                for record in self.jobs.values():
+                    if record.get("runnerId") == active_id and record.get("result") is None:
+                        record["result"] = {
+                            "jobId": record["job"]["jobId"],
+                            "exitCode": 1,
+                            "stdout": "",
+                            "stderr": "The assigned host runner disconnected before returning a result.",
+                            "interrupted": True,
+                        }
+            self.runner = {
+                "id": runner_id,
+                "seen": now,
+                "pid": headers.get("X-Nestbox-Runner-Pid"),
+                "platform": headers.get("X-Nestbox-Runner-Platform"),
+                "hostname": headers.get("X-Nestbox-Runner-Host"),
+            }
+            self.condition.notify_all()
+
+    def status(self):
+        with self.condition:
+            if not self.runner:
+                return {"available": False}
+            age = max(0, time.monotonic() - self.runner["seen"])
+            return {
+                "available": age <= HOST_HEARTBEAT_TTL,
+                "ageSeconds": round(age, 3),
+                "pid": self.runner.get("pid"),
+                "platform": self.runner.get("platform"),
+                "hostname": self.runner.get("hostname"),
+            }
+
+    def enqueue(self, job):
+        with self.condition:
+            if len(self.jobs) >= MAX_HOST_JOBS:
+                raise RuntimeError("too many host jobs are pending")
+            self.jobs[job["jobId"]] = {"job": job, "result": None, "runnerId": None}
+            self.pending.append(job["jobId"])
+            self.condition.notify_all()
+
+    def next(self, runner_id, headers, timeout):
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while True:
+                if self.runner.get("id") != runner_id:
+                    raise PermissionError("another host runner is active")
+                if time.monotonic() - self.runner.get("seen", 0) > HOST_HEARTBEAT_TTL:
+                    return None
+                if self.pending:
+                    identifier = self.pending.pop(0)
+                    record = self.jobs.get(identifier)
+                    if record:
+                        record["runnerId"] = runner_id
+                        return record["job"]
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self.condition.wait(min(1, remaining))
+
+    def complete(self, runner_id, identifier, result):
+        with self.condition:
+            record = self.jobs.get(identifier)
+            if not record or record.get("runnerId") != runner_id:
+                raise ValueError("host job is unknown or belongs to another runner")
+            if record.get("result") is not None:
+                raise ValueError("host job already has a result")
+            if result.get("jobId") != identifier:
+                raise ValueError("host result contains a mismatched job ID")
+            job = record["job"]
+            if job["type"] == "npm.run":
+                if not isinstance(result.get("exitCode"), int) or not isinstance(result.get("stdout"), str) or not isinstance(result.get("stderr"), str):
+                    raise ValueError("invalid npm run result")
+            elif job["type"] == "npm.scripts.request":
+                if result.get("status") != "confirmation_required" or result.get("requestId") != job.get("requestId") or result.get("operation") != job.get("operation") or result.get("name") != job.get("name"):
+                    if not isinstance(result.get("exitCode"), int):
+                        raise ValueError("invalid script change request result")
+            elif job["type"] == "npm.scripts.confirm":
+                if result.get("status") == "success" and result.get("requestId") != job.get("requestId"):
+                    raise ValueError("invalid script confirmation result")
+                if result.get("status") != "success" and not isinstance(result.get("exitCode"), int):
+                    raise ValueError("invalid script confirmation result")
+            record["result"] = result
+            self.condition.notify_all()
+
+    def wait(self, identifier, timeout=HOST_TIMEOUT):
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while True:
+                record = self.jobs.get(identifier)
+                if record and record.get("runnerId") and record.get("result") is None:
+                    owner = record["runnerId"]
+                    if self.runner.get("id") != owner or time.monotonic() - self.runner.get("seen", 0) > HOST_HEARTBEAT_TTL:
+                        record["result"] = {
+                            "jobId": identifier,
+                            "exitCode": 1,
+                            "stdout": "",
+                            "stderr": "The assigned host runner disconnected before returning a result.",
+                            "interrupted": True,
+                        }
+                elif record and record.get("result") is None and self.runner and time.monotonic() - self.runner.get("seen", 0) > HOST_HEARTBEAT_TTL:
+                    record["result"] = {
+                        "jobId": identifier,
+                        "exitCode": 1,
+                        "stdout": "",
+                        "stderr": "The host runner disconnected before accepting the job.",
+                        "interrupted": True,
+                    }
+                if record and record.get("result") is not None:
+                    result = record["result"]
+                    del self.jobs[identifier]
+                    return result
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.jobs.pop(identifier, None)
+                    if identifier in self.pending:
+                        self.pending.remove(identifier)
+                    raise TimeoutError(f"host runner did not finish within {timeout} seconds")
+                self.condition.wait(min(1, remaining))
+
+
+HOST_BROKER = HostBroker()
 
 
 def host_status():
-    paths = host_paths()
-    try:
-        age = max(0, time.time() - os.path.getmtime(paths["heartbeat"] + ".json"))
-        with open(paths["heartbeat"] + ".json", encoding="utf-8") as stream:
-            heartbeat = json.load(stream)
-        return {"available": age <= HOST_HEARTBEAT_TTL, "ageSeconds": round(age, 3), "pid": heartbeat.get("pid"), "platform": heartbeat.get("platform"), "hostname": heartbeat.get("hostname")}
-    except (OSError, ValueError, TypeError):
-        return {"available": False}
-
-
-def atomic_json(path, value):
-    temporary = f"{path}.{uuid.uuid4().hex}.tmp"
-    with open(temporary, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, sort_keys=True)
-        stream.write("\n")
-    os.replace(temporary, path)
+    return HOST_BROKER.status()
 
 
 def enqueue(job):
-    paths = host_paths()
-    os.makedirs(paths["requests"], exist_ok=True)
-    os.makedirs(paths["results"], exist_ok=True)
-    atomic_json(os.path.join(paths["requests"], f"{job['jobId']}.json"), job)
-    return paths
+    HOST_BROKER.enqueue(job)
 
 
-def wait_result(identifier, paths, timeout=HOST_TIMEOUT):
-    path = os.path.join(paths["results"], f"{identifier}.json")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with open(path, encoding="utf-8") as stream:
-                result = json.load(stream)
-            os.unlink(path)
-            if result.get("jobId") != identifier:
-                raise ValueError("host runner returned a mismatched job ID")
-            return result
-        except FileNotFoundError:
-            time.sleep(0.1)
-    raise TimeoutError(f"host runner did not finish within {timeout} seconds")
+def wait_result(identifier, timeout=HOST_TIMEOUT):
+    return HOST_BROKER.wait(identifier, timeout)
 
 
 def record_host_result(identifier, source_name, script, result, detached):
@@ -245,9 +358,9 @@ def record_host_result(identifier, source_name, script, result, detached):
     log_event("npm.complete", runId=identifier, source=source_name, script=script, detached=detached, executor="host", exitCode=result.get("exitCode"), hostPlatform=result.get("hostPlatform"), hostName=result.get("hostName"), stdoutTruncated=bool(result.get("stdoutTruncated")), stderrTruncated=bool(result.get("stderrTruncated")))
 
 
-def wait_detached(identifier, paths, source_name, script):
+def wait_detached(identifier, source_name, script):
     try:
-        record_host_result(identifier, source_name, script, wait_result(identifier, paths), True)
+        record_host_result(identifier, source_name, script, wait_result(identifier), True)
     except Exception as error:
         log_event("npm.error", runId=identifier, source=source_name, script=script, detached=True, error=str(error))
 
@@ -259,7 +372,7 @@ def valid_command(command):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "nestbox-control/0.2"
+    server_version = "nestbox-control/0.3"
 
     def setup(self):
         super().setup()
@@ -398,11 +511,11 @@ class Handler(BaseHTTPRequestHandler):
         identifier = run_id("npm")
         job = {"schemaVersion": 1, "jobId": identifier, "type": "npm.run", "script": script, "args": args, "source": service(source), "createdAt": now_iso()}
         try:
-            paths = enqueue(job)
+            enqueue(job)
             if body.get("detach"):
-                threading.Thread(target=wait_detached, args=(identifier, paths, service(source), script), daemon=True).start()
+                threading.Thread(target=wait_detached, args=(identifier, service(source), script), daemon=True).start()
                 self.send_json(202, {"runId": identifier, "detached": True, "executor": "host"}); return
-            result = wait_result(identifier, paths)
+            result = wait_result(identifier)
             record_host_result(identifier, service(source), script, result, False)
             self.send_json(200, {"runId": identifier, "exitCode": result.get("exitCode"), "stdout": str(result.get("stdout", "")), "stderr": str(result.get("stderr", "")), "pid": result.get("pid"), "executor": "host"})
         except Exception as error:
@@ -422,7 +535,8 @@ class Handler(BaseHTTPRequestHandler):
         job = {"schemaVersion": 1, "jobId": identifier, "type": "npm.scripts.request", "requestId": identifier, "operation": operation, "name": name, "source": service(source), "createdAt": now_iso()}
         if operation != "delete": job["command"] = command
         try:
-            result = wait_result(identifier, enqueue(job))
+            enqueue(job)
+            result = wait_result(identifier)
             if result.get("status") != "confirmation_required": raise ValueError(result.get("stderr", "host runner rejected the request"))
             self.send_json(202, {"status": "confirmation_required", "requestId": result.get("requestId"), "operation": operation, "name": name, "expiresAt": result.get("expiresAt")})
         except Exception as error:
@@ -437,16 +551,108 @@ class Handler(BaseHTTPRequestHandler):
         identifier = run_id("npm-script-confirm")
         job = {"schemaVersion": 1, "jobId": identifier, "type": "npm.scripts.confirm", "requestId": request_id, "code": code, "source": service(source), "createdAt": now_iso()}
         try:
-            result = wait_result(identifier, enqueue(job))
+            enqueue(job)
+            result = wait_result(identifier)
             if result.get("status") != "success": raise ValueError(result.get("stderr", "host runner rejected the confirmation"))
             self.send_json(200, {"status": "success", "requestId": request_id, "operation": result.get("operation"), "name": result.get("name")})
         except Exception as error:
             self.send_json(400, {"error": str(error)})
 
 
+class HostHandler(BaseHTTPRequestHandler):
+    server_version = "nestbox-host-control/0.3"
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(HOST_LONG_POLL_TIMEOUT + 10)
+
+    def log_message(self, fmt, *args):
+        log_event("host.http.access", client=self.address_string(), message=fmt % args)
+
+    def send_json(self, status, value):
+        payload = json.dumps(value, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def authorized(self):
+        supplied = self.headers.get("Authorization", "")
+        expected = f"Bearer {HOST_TOKEN}"
+        return hmac.compare_digest(supplied.encode(), expected.encode())
+
+    def runner(self):
+        return self.headers.get("X-Nestbox-Runner-Id", "")
+
+    def body(self):
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("transfer encoding is not supported")
+        length = int(self.headers.get("Content-Length", "0"))
+        if length < 0 or length > MAX_HOST_BODY_BYTES:
+            raise ValueError("request body is too large")
+        value = json.loads(self.rfile.read(length)) if length else {}
+        if not isinstance(value, dict):
+            raise ValueError("request body must be a JSON object")
+        return value
+
+    def authenticate(self):
+        if not self.authorized():
+            self.send_json(401, {"error": "invalid host runner token"})
+            return False
+        try:
+            HOST_BROKER.touch(self.runner(), self.headers)
+            return True
+        except PermissionError as error:
+            self.send_json(409, {"error": str(error)})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+        return False
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/host/health":
+            if not self.authenticate(): return
+            self.send_json(200, {"ok": True, "hostRunner": host_status()})
+            return
+        if parsed.path == "/host/jobs/next":
+            if not self.authenticate(): return
+            try:
+                requested = int((parse_qs(parsed.query).get("timeout") or [HOST_LONG_POLL_TIMEOUT])[0])
+                timeout = max(1, min(HOST_LONG_POLL_TIMEOUT, requested))
+                job = HOST_BROKER.next(self.runner(), self.headers, timeout)
+                if job is None:
+                    self.send_response(204); self.end_headers(); return
+                self.send_json(200, job)
+            except (TypeError, ValueError) as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        self.send_json(404, {"error": "not found"})
+
+    def do_POST(self):
+        if not self.authenticate(): return
+        path = urlparse(self.path).path
+        if path == "/host/heartbeat":
+            self.send_json(200, {"ok": True})
+            return
+        match = re.fullmatch(r"/host/jobs/([A-Za-z0-9._:-]{1,128})/result", path)
+        if not match:
+            self.send_json(404, {"error": "not found"}); return
+        try:
+            result = self.body()
+            HOST_BROKER.complete(self.runner(), match.group(1), result)
+            self.send_json(202, {"accepted": True})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+
+
 def main():
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", PROJECT_NAME):
         raise SystemExit("COMPOSE_PROJECT_NAME must be a non-empty lowercase project slug")
+    if len(HOST_TOKEN) < 32:
+        raise SystemExit("NESTBOX_HOST_TOKEN_FILE must contain a token of at least 32 characters")
+    host_server = ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("NESTBOX_CONTROL_HOST_PORT", "4089"))), HostHandler)
+    threading.Thread(target=host_server.serve_forever, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("NESTBOX_CONTROL_PORT", "4088"))), Handler).serve_forever()
 
 

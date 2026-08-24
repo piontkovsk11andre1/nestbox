@@ -41,4 +41,8 @@ for (const path of ['host-runner.mjs', 'package.host.json']) {
   if (!packageJson.files.includes(path)) throw new Error(`package.json files must include ${path}.`);
 }
 
+for (const path of ['!**/node_modules/', '!home/code/scripts-bundle.js', '!home/code/scripts-bundle.css']) {
+  if (!packageJson.files.includes(path)) throw new Error(`package.json files must include ${path}.`);
+}
+
 console.log('Package checks passed.');

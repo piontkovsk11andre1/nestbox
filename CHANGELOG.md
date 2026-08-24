@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Replace the filesystem host queue with authenticated HTTP long polling managed by `control`.
+- Publish only the dedicated host-runner endpoint on loopback; keep the container API internal.
+- Remove queue paths, bind mounts, polling files, and stale lock/result state.
+- Generate a per-installation runner token file unavailable to application containers and preserve existing MCP and PHP contracts.
+
 ## 0.2.0
 
 - Add a private, label-gated container control service and OpenCode MCP adapter.

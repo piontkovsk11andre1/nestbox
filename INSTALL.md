@@ -12,12 +12,14 @@ npm create @p10i/nestbox@latest
 
 The published npm package is `@p10i/create-nestbox`; npm maps `npm create @p10i/nestbox` to that package. The creator explains and previews one of the two default layouts before writing files. The recommended layout installs at `<workspace>/.nestbox` so Nestbox stays separate from project files. The direct layout writes Nestbox files into an empty selected directory. The creator copies `.env.example` to `.env`, copies `home/configs/opencode/instance.example.md` to `instance.md`, records npm package provenance in the instance policy, and initializes fresh installation Git history when Git is available.
 
-The creator does not start Docker, start the host bridge, or collect secrets. Node.js and npm are required for the bridge. After it finishes, edit `.env`, run `npm run host --` from the workspace in a separate terminal, then run from the installation directory:
+The creator does not start Docker, start the host bridge, or collect secrets. Node.js and npm are required for the bridge. After it finishes, edit `.env`, then run from the installation directory:
 
 ```sh
 docker compose config --quiet
 docker compose up -d --build
 ```
+
+After `control` is healthy, run `npm run host --` from the workspace in a separate terminal.
 
 Then run the host test suite documented in section 7.
 
@@ -42,7 +44,7 @@ Both defaults keep pages, Compose, Dockerfiles, configuration, dependencies, and
 
 Do not present vendoring, a parent-owned engine, a submodule, an external page tree, or another shared-repository arrangement as a default. These are optional adaptations discussed only when the user requests one.
 
-Never overwrite an existing installation. Inspect an existing target and ask whether to update, repair, reuse, or stop.
+Never overwrite an existing installation. Select a different target or stop.
 
 ## 3. Check Requirements And Git
 
@@ -98,9 +100,10 @@ Configure the host bridge in the workspace root before Compose starts:
 
 - For `.nestbox` layout, create `package.json` from `.nestbox/package.host.json` when absent, or merge only its `host` and `test:host` scripts into the existing manifest.
 - For direct layout, use `node host-runner.mjs` and `node tests/host-runner.mjs` for those scripts. A source clone's publisher-oriented `package.json` may be replaced by this installation manifest after preserving any intentional project metadata.
-- Never overwrite a conflicting script. Stop and ask for a different script name or an explicit migration.
-- Create a private host-state queue outside the workspace, record it in the ignored installation `.runtime/host-runner.json`, and set its absolute path as `NESTBOX_HOST_QUEUE_PATH` in `.env`. The npm creator performs this automatically.
-- Start `npm run host --` before Compose so the queue and heartbeat exist. The runner rejects queue locations inside the mounted workspace.
+- Never overwrite a conflicting script. Stop and ask for a different script name.
+- Set `NESTBOX_HOST_TOKEN_FILE` to a private file outside every container-mounted workspace. The npm creator writes a 64-character token there with owner-only permissions. Only `control` mounts the file; never paste the token into chat or expose it through a page.
+- Confirm that `NESTBOX_CONTROL_HOST_PORT`, normally `4089`, is available. Compose publishes this authenticated runner endpoint on host loopback only.
+- Start `npm run host --` after `control` is healthy. The runner authenticates, long-polls for work, sends heartbeats, and posts results without opening a host listener or sharing queue files.
 - The workspace manifest is mounted read-only in runtime containers. Confirmed changes are written only by the native host runner.
 
 Update the new `home/configs/opencode/instance.md` with:
@@ -118,6 +121,7 @@ Then ask about:
 
 - a unique lowercase `COMPOSE_PROJECT_NAME`;
 - whether to use default port `4180`; verify availability and ask before choosing another port;
+- whether host-runner port `4089` is available; keep it loopback-only;
 - loopback-only or network access;
 - OpenCode username and password;
 - AI providers;
@@ -271,4 +275,4 @@ When a super-document intentionally changes files in `/workspace`, follow that w
 
 ## 11. Optional Adaptations
 
-Retaining upstream Git history, adding an upstream remote, external page trees, parent-owned engines, submodules, vendoring, shared repositories, alternate Compose layouts, and operating-system shortcuts are optional. Explain their ownership and update consequences and obtain explicit confirmation before creating them. They must not obscure the two default installation paths.
+Retaining upstream Git history, adding an upstream remote, external page trees, parent-owned engines, submodules, vendoring, shared repositories, alternate Compose layouts, and operating-system shortcuts are optional. Explain their ownership consequences and obtain explicit confirmation before creating them. They must not obscure the two default installation paths.

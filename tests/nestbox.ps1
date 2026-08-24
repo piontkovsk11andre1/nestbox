@@ -91,9 +91,11 @@ function Invoke-Http([string]$Path, [string]$HostHeader = '', [string]$Method = 
 
 try {
     New-Item -ItemType Directory -Path $TempDirectory | Out-Null
-    $configuredQueue = [regex]::Match([IO.File]::ReadAllText((Join-Path $Root '.env')), '(?m)^NESTBOX_HOST_QUEUE_PATH=(.+)$').Groups[1].Value.Trim()
-    if (-not $env:NESTBOX_HOST_QUEUE_PATH -and -not $configuredQueue) { $env:NESTBOX_HOST_QUEUE_PATH = Join-Path $TempDirectory 'host-runner' }
-    if ($env:NESTBOX_HOST_QUEUE_PATH) { New-Item -ItemType Directory -Path $env:NESTBOX_HOST_QUEUE_PATH -Force | Out-Null }
+    $configuredTokenFile = [regex]::Match([IO.File]::ReadAllText((Join-Path $Root '.env')), '(?m)^NESTBOX_HOST_TOKEN_FILE=(.+)$').Groups[1].Value.Trim()
+    if (-not $env:NESTBOX_HOST_TOKEN_FILE -and -not $configuredTokenFile) {
+        $env:NESTBOX_HOST_TOKEN_FILE = Join-Path $TempDirectory 'host-token'
+        [IO.File]::WriteAllText($env:NESTBOX_HOST_TOKEN_FILE, 'test-token-' + ('0' * 54))
+    }
 
     if (Get-Command docker -ErrorAction SilentlyContinue) { Pass 'docker is available' } else { Fail 'docker is required'; throw 'Missing Docker' }
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) { Pass 'curl.exe is available' } else { Fail 'curl.exe is required'; throw 'Missing curl.exe' }
@@ -250,10 +252,14 @@ try {
     $controlId = Get-ContainerId 'control'
     $controlInspect = @(& docker inspect $controlId 2>$null | ConvertFrom-Json)[0]
     if ($null -eq $controlInspect.NetworkSettings.Ports.'4088/tcp') { Pass 'Control API is not published on the host' } else { Fail 'Control API is published on the host' }
+    $runnerBinding = $controlInspect.NetworkSettings.Ports.'4089/tcp'
+    if ($null -ne $runnerBinding -and @($runnerBinding.HostIp) -notcontains '0.0.0.0' -and @($runnerBinding.HostIp) -notcontains '::') { Pass 'Host runner API is published on loopback only' } else { Fail 'Host runner API is not restricted to loopback' }
     $openCodeId = Get-ContainerId 'opencode'
     $openCodeInspect = @(& docker inspect $openCodeId 2>$null | ConvertFrom-Json)[0]
     if (@($openCodeInspect.Mounts.Destination) -notcontains '/var/run/docker.sock') { Pass 'OpenCode does not receive the Docker socket' } else { Fail 'OpenCode receives the Docker socket' }
+    if (@($openCodeInspect.Mounts.Destination) -notcontains '/run/secrets/nestbox-host-token' -and @($openCodeInspect.Config.Env) -notmatch '^NESTBOX_HOST_TOKEN=') { Pass 'OpenCode cannot read the host runner token' } else { Fail 'OpenCode can read the host runner token' }
     if (@($controlInspect.Mounts.Destination) -contains '/var/run/docker.sock') { Pass 'Control receives the Docker socket' } else { Fail 'Control does not receive the Docker socket' }
+    if (@($controlInspect.Mounts.Destination) -contains '/run/secrets/nestbox-host-token') { Pass 'Control receives the host runner token file' } else { Fail 'Control does not receive the host runner token file' }
 
     if ($indexPresent) {
         $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-l', '/home/code/index.php') -Quiet

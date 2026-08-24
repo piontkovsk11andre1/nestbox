@@ -25,6 +25,25 @@ target["Labels"]["com.docker.compose.service"] = "rollup"
 assert "not allowed" in control.policy_error(source, target, "1000")
 source["Labels"].pop("nestbox.exec.targets")
 assert "no allowed" in control.policy_error(source, target, "1000")
+broker = control.HostBroker()
+headers = {"X-Nestbox-Runner-Pid": "123", "X-Nestbox-Runner-Platform": "test", "X-Nestbox-Runner-Host": "host"}
+broker.touch("runner-test-1234", headers)
+assert broker.status()["available"]
+job = {"jobId": "job-test", "type": "npm.run"}
+broker.enqueue(job)
+assert broker.next("runner-test-1234", headers, 1) == job
+broker.complete("runner-test-1234", "job-test", {"jobId": "job-test", "exitCode": 0, "stdout": "", "stderr": ""})
+assert broker.wait("job-test", 1)["exitCode"] == 0
+stale = control.HostBroker()
+stale.touch("runner-stale-1234", headers)
+stale.enqueue({"jobId": "job-stale", "type": "npm.run"})
+assert stale.next("runner-stale-1234", headers, 1)["jobId"] == "job-stale"
+control.HOST_HEARTBEAT_TTL = 0
+assert stale.wait("job-stale", 1)["interrupted"] is True
+pending = control.HostBroker()
+pending.touch("runner-pending-1234", headers)
+pending.enqueue({"jobId": "job-pending", "type": "npm.run"})
+assert pending.wait("job-pending", 1)["interrupted"] is True
 `;
 
 let result = spawnSync(python, ['-c', policyTest], {

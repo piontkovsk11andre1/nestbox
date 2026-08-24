@@ -1,6 +1,6 @@
 {
   "name": "@p10i/create-nestbox",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Create Nestbox projects.",
   "license": "MIT",
   "type": "module",
@@ -11,8 +11,6 @@
     "bin/",
     "scripts/",
     "docker/",
-    "!docker/control/__pycache__/",
-    "!**/*.pyc",
     "home/",
     "tests/",
     "host-runner.mjs",
@@ -25,7 +23,12 @@
     "INSTALL.md",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "!docker/control/__pycache__/",
+    "!**/*.pyc",
+    "!**/node_modules/",
+    "!home/code/scripts-bundle.js",
+    "!home/code/scripts-bundle.css"
   ],
   "scripts": {
     "host": "node host-runner.mjs",

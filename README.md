@@ -12,7 +12,7 @@ Nestbox runs with Docker Compose using Nginx, PHP-FPM, Rollup, OpenCode, and a p
 
 The `control` service is the only container with `/var/run/docker.sock`. Its internal-only API permits exec only when caller, target, project, and root-user labels allow it. OpenCode reaches the API through the bundled control MCP and can target PHP-FPM and Rollup by default. Trusted PHP pages can use `nestbox_control_exec()` and are restricted to PHP-FPM self-exec.
 
-Native host commands are limited to scripts already declared in the workspace `package.json`. Keep `npm run host --` running from the workspace when host scripts are needed. The bridge exchanges typed files through creator-generated host state outside the container-mounted workspace; it opens no network listener. MCP can request script additions, edits, or deletions, but the host runner applies them only after the user supplies a short-lived code displayed exclusively in the host terminal.
+Native host commands are limited to scripts already declared in the workspace `package.json`. Keep `npm run host --` running from the workspace when host scripts are needed. The native runner authenticates with an external token file mounted only into `control`, long-polls a loopback-only endpoint, and posts results; no host server or shared filesystem queue is used. MCP can request script additions, edits, or deletions, but the host runner applies them only after the user supplies a short-lived code displayed exclusively in the host terminal.
 
 Control emits bounded structured events to ordinary container logs. Use `docker compose logs control`; no telemetry collector, database, or observability dependency is installed. Docker socket access is root-equivalent on the host, and host scripts execute in the trusted writable workspace, so neither mechanism is a sandbox.
 
@@ -38,12 +38,4 @@ For agent-guided installation or repair work, copy and send this to an agent wit
 
 ```text
 Install Nestbox by following https://github.com/piontkovsk11andre1/nestbox/blob/main/INSTALL.md completely. Ask all required questions before making changes, preserve unrelated files and Git history, and do not expose secrets.
-```
-
-## Update
-
-Run an update request from the workspace containing Nestbox, then copy and send this prompt to an agent with filesystem, Git, Docker, and terminal access:
-
-```text
-Update this Nestbox installation from https://github.com/piontkovsk11andre1/nestbox. Locate the installation, inspect its local Git history and configuration, read the current remote INSTALL.md and internal Nestbox instructions, preserve pages, instance policy, secrets, volumes, and unrelated changes, explain the proposed update, and ask before destructive or system-level operations. Validate Compose and run the Nestbox host tests after applying the update.
 ```

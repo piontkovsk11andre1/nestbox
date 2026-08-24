@@ -74,7 +74,7 @@ async function call(name, raw) {
 
 function emit(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
 async function handle(message) {
-  if (message.method === 'initialize') return emit({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'nestbox-control-mcp', version: '0.2.0' } } });
+  if (message.method === 'initialize') return emit({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'nestbox-control-mcp', version: '0.3.0' } } });
   if (message.method === 'initialized') return;
   if (message.method === 'tools/list') return emit({ jsonrpc: '2.0', id: message.id, result: { tools } });
   if (message.method === 'tools/call') {

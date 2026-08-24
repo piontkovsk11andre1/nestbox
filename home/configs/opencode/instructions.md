@@ -178,15 +178,15 @@ OpenCode has no Docker socket. Use the control MCP as the only path for commands
 - `npm_script_change_request` requests an add, edit, or delete. The confirmation code appears only in the host runner terminal.
 - `npm_script_change_confirm` applies the pending change after the user explicitly supplies that code.
 
-Do not call the control HTTP API directly from OpenCode, write queue files, invoke Docker or SSH as a substitute, or work around a missing MCP capability. PHP cannot invoke MCP, so trusted super-documents may use `nestbox_control_exec()`; default labels restrict PHP-FPM to self-exec. Only OpenCode has `nestbox.npm.allow=true` by default. Root exec requires an explicit target label.
+Do not call the control HTTP API directly from OpenCode, impersonate the native runner, invoke Docker or SSH as a substitute, or work around a missing MCP capability. PHP cannot invoke MCP, so trusted super-documents may use `nestbox_control_exec()`; default labels restrict PHP-FPM to self-exec. Only OpenCode has `nestbox.npm.allow=true` by default. Root exec requires an explicit target label.
 
-The control log is the audit source of truth and requires no observability service. Its host queue stays outside container-mounted workspace paths. Commands still operate in trusted containers and a trusted writable workspace; Docker socket access and editable host-script source mean this is a controlled capability, not a security sandbox.
+The control log is the audit source of truth and requires no observability service. The native runner uses an authenticated, loopback-only long-poll endpoint; no host listener or filesystem queue exists. Commands still operate in trusted containers and a trusted writable workspace; Docker socket access and editable host-script source mean this is a controlled capability, not a security sandbox.
 
 ## Git And Commit Policy
 
 - Resolve the owning Git root before staging any path.
 - Read the separately loaded `instance.md` before committing Nestbox work. It records the installation layout, repository roots, and commit policy without exposing `.env`.
-- Treat the repository as installation history. Do not assume an upstream remote or upstream commit ancestry exists; use the recorded source revision when reasoning about upgrades.
+- Treat the repository as installation history. Do not assume an upstream remote or upstream commit ancestry exists.
 - The policy may allow logical commits after verification, require confirmation before each commit, or require leaving changes uncommitted.
 - Reasonable Nestbox commits include super-documents, Compose, Dockerfiles, configurations, integrations, and dependency files.
 - Keep commits within one Git root. When one feature spans repositories, create separate commits and report their relationship.
