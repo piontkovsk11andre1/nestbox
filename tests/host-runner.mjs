@@ -30,16 +30,16 @@ const server = createServer(async (request, response) => {
   if (request.headers.authorization !== `Bearer ${token}` || !request.headers['x-nestbox-runner-id']) {
     response.writeHead(401).end('{"error":"unauthorized"}'); return;
   }
-  if (request.method === 'POST' && request.url === '/host/heartbeat') {
+  if (request.method === 'POST' && request.url === '/_nestbox/host/heartbeat') {
     if (heartbeatConflicts > 0) { heartbeatConflicts -= 1; response.writeHead(409).end('{"error":"another host runner is active"}'); return; }
     await readBody(request); response.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'); return;
   }
-  if (request.method === 'GET' && request.url.startsWith('/host/jobs/next')) {
+  if (request.method === 'GET' && request.url.startsWith('/_nestbox/host/jobs/next')) {
     const job = jobs.shift();
     if (!job) { response.writeHead(204).end(); return; }
     response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(job)); return;
   }
-  const match = request.url.match(/^\/host\/jobs\/([^/]+)\/result$/);
+  const match = request.url.match(/^\/_nestbox\/host\/jobs\/([^/]+)\/result$/);
   if (request.method === 'POST' && match) {
     const jobId = decodeURIComponent(match[1]);
     const result = await readBody(request);
@@ -89,7 +89,7 @@ try {
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListen); });
   const port = server.address().port;
   runner = spawn(process.execPath, [runnerPath, '--json'], {
-    env: { ...process.env, npm_execpath: '', NESTBOX_HOST_WORKSPACE: fixture, NESTBOX_CONTROL_HOST_URL: `http://127.0.0.1:${port}`, NESTBOX_HOST_TOKEN_FILE: tokenPath, NESTBOX_HOST_TOKEN: '' },
+    env: { ...process.env, npm_execpath: '', NESTBOX_HOST_WORKSPACE: fixture, NESTBOX_CONTROL_HOST_URL: `http://127.0.0.1:${port}/_nestbox`, NESTBOX_HOST_TOKEN_FILE: tokenPath, NESTBOX_HOST_TOKEN: '' },
     stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
   let runnerStderr = '';
@@ -119,7 +119,7 @@ try {
   runner.kill('SIGTERM'); await exit; runner = undefined;
 
   const onceRunner = spawn(process.execPath, [runnerPath, '--once', '--json'], {
-    env: { ...process.env, npm_execpath: '', NESTBOX_HOST_WORKSPACE: fixture, NESTBOX_CONTROL_HOST_URL: `http://127.0.0.1:${port}`, NESTBOX_HOST_TOKEN_FILE: tokenPath, NESTBOX_HOST_TOKEN: '' },
+    env: { ...process.env, npm_execpath: '', NESTBOX_HOST_WORKSPACE: fixture, NESTBOX_CONTROL_HOST_URL: `http://127.0.0.1:${port}/_nestbox`, NESTBOX_HOST_TOKEN_FILE: tokenPath, NESTBOX_HOST_TOKEN: '' },
     stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
   const onceExit = await Promise.race([
@@ -131,7 +131,7 @@ try {
   const unsafeToken = join(fixture, 'unsafe-token');
   await writeFile(unsafeToken, `${token}\n`);
   const unsafe = spawnSync(process.execPath, [runnerPath, '--once'], {
-    env: { ...process.env, NESTBOX_HOST_WORKSPACE: fixture, NESTBOX_CONTROL_HOST_URL: `http://127.0.0.1:${port}`, NESTBOX_HOST_TOKEN_FILE: unsafeToken, NESTBOX_HOST_TOKEN: '' }, encoding: 'utf8', windowsHide: true,
+    env: { ...process.env, NESTBOX_HOST_WORKSPACE: fixture, NESTBOX_CONTROL_HOST_URL: `http://127.0.0.1:${port}/_nestbox`, NESTBOX_HOST_TOKEN_FILE: unsafeToken, NESTBOX_HOST_TOKEN: '' }, encoding: 'utf8', windowsHide: true,
   });
   if (unsafe.status === 0 || !unsafe.stderr.includes('must be outside')) throw new Error('Runner accepted a token inside the workspace.');
   console.log('Host runner HTTP tests passed.');

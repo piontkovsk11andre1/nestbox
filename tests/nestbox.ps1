@@ -253,7 +253,9 @@ try {
     $controlInspect = @(& docker inspect $controlId 2>$null | ConvertFrom-Json)[0]
     if ($null -eq $controlInspect.NetworkSettings.Ports.'4088/tcp') { Pass 'Control API is not published on the host' } else { Fail 'Control API is published on the host' }
     $runnerBinding = $controlInspect.NetworkSettings.Ports.'4089/tcp'
-    if ($null -ne $runnerBinding -and @($runnerBinding.HostIp) -notcontains '0.0.0.0' -and @($runnerBinding.HostIp) -notcontains '::') { Pass 'Host runner API is published on loopback only' } else { Fail 'Host runner API is not restricted to loopback' }
+    if ($null -eq $runnerBinding) { Pass 'Host runner API is not published separately' } else { Fail 'Host runner API is published separately' }
+    $response = Invoke-Http '/_nestbox/host/health'
+    if ($response.Status -eq 401) { Pass 'Nginx routes the authenticated host runner API' } else { Fail "Host runner gateway returned HTTP $($response.Status) instead of 401" }
     $openCodeId = Get-ContainerId 'opencode'
     $openCodeInspect = @(& docker inspect $openCodeId 2>$null | ConvertFrom-Json)[0]
     if (@($openCodeInspect.Mounts.Destination) -notcontains '/var/run/docker.sock') { Pass 'OpenCode does not receive the Docker socket' } else { Fail 'OpenCode receives the Docker socket' }

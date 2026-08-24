@@ -114,9 +114,8 @@ services:
       dockerfile: ./docker/control/Dockerfile
     expose:
       - "4088"
-    ports:
-      # Authenticated native runner transport; never bind beyond loopback.
-      - "127.0.0.1:${NESTBOX_CONTROL_HOST_PORT:-4089}:4089"
+      # Authenticated host-runner transport, proxied only through Nginx.
+      - "4089"
     volumes:
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
       - type: bind
@@ -134,7 +133,6 @@ services:
     environment:
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
       - NESTBOX_CONTROL_SERVICE=control
-      - NESTBOX_CONTROL_HOST_PORT=4089
       - NESTBOX_HOST_TOKEN_FILE=/run/secrets/nestbox-host-token
       - NESTBOX_CONTROL_LOG_OUTPUT=${NESTBOX_CONTROL_LOG_OUTPUT:-text}
       - NESTBOX_CONTROL_LOG_MAX_BYTES=${NESTBOX_CONTROL_LOG_MAX_BYTES:-262144}

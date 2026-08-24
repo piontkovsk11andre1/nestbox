@@ -102,8 +102,7 @@ Configure the host bridge in the workspace root before Compose starts:
 - For direct layout, use `node host-runner.mjs` and `node tests/host-runner.mjs` for those scripts. A source clone's publisher-oriented `package.json` may be replaced by this installation manifest after preserving any intentional project metadata.
 - Never overwrite a conflicting script. Stop and ask for a different script name.
 - Set `NESTBOX_HOST_TOKEN_FILE` to a private file outside every container-mounted workspace. The npm creator writes a 64-character token there with owner-only permissions. Only `control` mounts the file; never paste the token into chat or expose it through a page.
-- Confirm that `NESTBOX_CONTROL_HOST_PORT`, normally `4089`, is available. Compose publishes this authenticated runner endpoint on host loopback only.
-- Start `npm run host --` after `control` is healthy. The runner authenticates, long-polls for work, sends heartbeats, and posts results without opening a host listener or sharing queue files.
+- Start `npm run host --` after `control` is healthy. The runner authenticates through `/_nestbox/host/` on the existing `WEB_PORT`, long-polls for work, sends heartbeats, and posts results without opening a host listener, publishing a second port, or sharing queue files.
 - The workspace manifest is mounted read-only in runtime containers. Confirmed changes are written only by the native host runner.
 
 Update the new `home/configs/opencode/instance.md` with:
@@ -121,7 +120,6 @@ Then ask about:
 
 - a unique lowercase `COMPOSE_PROJECT_NAME`;
 - whether to use default port `4180`; verify availability and ask before choosing another port;
-- whether host-runner port `4089` is available; keep it loopback-only;
 - loopback-only or network access;
 - OpenCode username and password;
 - AI providers;

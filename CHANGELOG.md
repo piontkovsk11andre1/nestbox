@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Route the authenticated host runner through `/_nestbox/host/` on the existing Nginx gateway.
+- Restore the one-Nestbox, one-published-port invariant while keeping the control APIs private.
+
 ## 0.3.0
 
 - Replace the filesystem host queue with authenticated HTTP long polling managed by `control`.

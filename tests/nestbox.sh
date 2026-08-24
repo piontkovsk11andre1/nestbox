@@ -348,7 +348,9 @@ control_id="$(container_id control)"
 control_binding="$(docker inspect --format '{{json (index .NetworkSettings.Ports "4088/tcp")}}' "$control_id" 2>/dev/null || true)"
 [[ -z "$control_binding" || "$control_binding" == "null" ]] && pass 'Control API is not published on the host' || fail 'Control API is published on the host'
 runner_binding="$(docker inspect --format '{{json (index .NetworkSettings.Ports "4089/tcp")}}' "$control_id" 2>/dev/null || true)"
-if [[ "$runner_binding" == *'"HostIp":"127.0.0.1"'* || "$runner_binding" == *'"HostIp":"::1"'* ]]; then pass 'Host runner API is published on loopback only'; else fail 'Host runner API is not restricted to loopback'; fi
+[[ -z "$runner_binding" || "$runner_binding" == "null" ]] && pass 'Host runner API is not published separately' || fail 'Host runner API is published separately'
+status="$(http_request '/_nestbox/host/health' 2>/dev/null || printf '000')"
+[[ "$status" == "401" ]] && pass 'Nginx routes the authenticated host runner API' || fail "Host runner gateway returned HTTP $status instead of 401"
 opencode_id="$(container_id opencode)"
 opencode_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' "$opencode_id" 2>/dev/null || true)"
 grep -Fq '/var/run/docker.sock' <<<"$opencode_mounts" && fail 'OpenCode receives the Docker socket' || pass 'OpenCode does not receive the Docker socket'

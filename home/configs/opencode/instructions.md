@@ -204,7 +204,7 @@ The default Compose application has five services:
 - `opencode`: runs this agent, mounts the engine and workspace, and edits the page tree through `/nestbox/home/code`.
 - `control`: owns the Docker socket and privately brokers label-gated container exec and host-runner jobs.
 
-The default host port is `4180` after installer confirmation. Nginx container port `80` serves both Nestbox and OpenCode through host-based routing. Nginx container port `8080` is only the internal Nchan publisher.
+The default host port is `4180` after installer confirmation. Nginx container port `80` serves Nestbox, OpenCode through host-based routing, and the authenticated `/_nestbox/host/` runner transport. Nginx container port `8080` is only the internal Nchan publisher. No other service publishes a host port.
 
 Important files:
 
@@ -226,6 +226,7 @@ The engine's untracked `/nestbox/.env` controls runtime paths, exposure, authent
 - `COMPOSE_PROJECT_NAME`: unique installation identifier; collisions can mix unrelated containers and networks.
 - `BIND_ADDRESS`: loopback for local use or an explicitly approved network bind.
 - `WEB_PORT`: confirmed host gateway port, normally `4180`.
+- `NESTBOX_HOST_TOKEN_FILE`: creator-managed private runner token outside the mounted workspace; only `control` receives it.
 - `APP_UID` and `APP_GID`: PHP-FPM ownership for writable bind mounts.
 - `NESTBOX_URL_PREFIX`: public path prefix when an outer proxy strips that prefix before forwarding.
 - `NESTBOX_OPENCODE_PUBLIC_URL`: explicit public OpenCode origin when `agent.<nestbox-host>` cannot be derived.

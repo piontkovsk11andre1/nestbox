@@ -372,7 +372,7 @@ def valid_command(command):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "nestbox-control/0.3"
+    server_version = "nestbox-control/0.4"
 
     def setup(self):
         super().setup()
@@ -560,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class HostHandler(BaseHTTPRequestHandler):
-    server_version = "nestbox-host-control/0.3"
+    server_version = "nestbox-host-control/0.4"
 
     def setup(self):
         super().setup()
@@ -651,7 +651,7 @@ def main():
         raise SystemExit("COMPOSE_PROJECT_NAME must be a non-empty lowercase project slug")
     if len(HOST_TOKEN) < 32:
         raise SystemExit("NESTBOX_HOST_TOKEN_FILE must contain a token of at least 32 characters")
-    host_server = ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("NESTBOX_CONTROL_HOST_PORT", "4089"))), HostHandler)
+    host_server = ThreadingHTTPServer(("0.0.0.0", 4089), HostHandler)
     threading.Thread(target=host_server.serve_forever, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("NESTBOX_CONTROL_PORT", "4088"))), Handler).serve_forever()
 

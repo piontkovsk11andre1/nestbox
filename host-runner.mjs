@@ -24,7 +24,11 @@ function parseEnv(contents) {
 }
 
 const fileEnv = await readFile(join(installDirectory, '.env'), 'utf8').then(parseEnv, error => error?.code === 'ENOENT' ? {} : Promise.reject(error));
-const controlUrl = (process.env.NESTBOX_CONTROL_HOST_URL || fileEnv.NESTBOX_CONTROL_HOST_URL || `http://127.0.0.1:${process.env.NESTBOX_CONTROL_HOST_PORT || fileEnv.NESTBOX_CONTROL_HOST_PORT || '4089'}`).replace(/\/$/, '');
+const bindAddress = process.env.BIND_ADDRESS || fileEnv.BIND_ADDRESS || '127.0.0.1';
+const gatewayAddress = bindAddress === '0.0.0.0' ? '127.0.0.1' : bindAddress === '::' ? '::1' : bindAddress;
+const gatewayHost = gatewayAddress.includes(':') && !gatewayAddress.startsWith('[') ? `[${gatewayAddress}]` : gatewayAddress;
+const webPort = process.env.WEB_PORT || fileEnv.WEB_PORT || '4180';
+const controlUrl = (process.env.NESTBOX_CONTROL_HOST_URL || fileEnv.NESTBOX_CONTROL_HOST_URL || `http://${gatewayHost}:${webPort}/_nestbox`).replace(/\/$/, '');
 const tokenPath = process.env.NESTBOX_HOST_TOKEN_FILE || fileEnv.NESTBOX_HOST_TOKEN_FILE || '';
 const resolvedTokenPath = tokenPath ? await realpath(resolve(tokenPath)).catch(() => resolve(tokenPath)) : '';
 function containsPath(root, target) {
