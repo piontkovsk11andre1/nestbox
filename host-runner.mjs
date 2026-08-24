@@ -1,108 +1,47 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hostname, platform } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 
 const installDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultWorkspace = basename(installDirectory) === '.nestbox' ? dirname(installDirectory) : installDirectory;
 const workspace = resolve(process.env.NESTBOX_HOST_WORKSPACE || defaultWorkspace);
-const canonicalInstallDirectory = await realpath(installDirectory).catch(() => resolve(installDirectory));
-const canonicalWorkspace = await realpath(workspace).catch(() => workspace);
-
-function parseEnv(contents) {
-  const values = {};
-  for (const line of contents.split(/\r?\n/)) {
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    values[match[1]] = value;
-  }
-  return values;
-}
-
-const fileEnv = await readFile(join(installDirectory, '.env'), 'utf8').then(parseEnv, error => error?.code === 'ENOENT' ? {} : Promise.reject(error));
-const bindAddress = process.env.BIND_ADDRESS || fileEnv.BIND_ADDRESS || '127.0.0.1';
-const gatewayAddress = bindAddress === '0.0.0.0' ? '127.0.0.1' : bindAddress === '::' ? '::1' : bindAddress;
-const gatewayHost = gatewayAddress.includes(':') && !gatewayAddress.startsWith('[') ? `[${gatewayAddress}]` : gatewayAddress;
-const webPort = process.env.WEB_PORT || fileEnv.WEB_PORT || '4180';
-const controlUrl = (process.env.NESTBOX_CONTROL_HOST_URL || fileEnv.NESTBOX_CONTROL_HOST_URL || `http://${gatewayHost}:${webPort}/_nestbox`).replace(/\/$/, '');
-const tokenPath = process.env.NESTBOX_HOST_TOKEN_FILE || fileEnv.NESTBOX_HOST_TOKEN_FILE || '';
-const resolvedTokenPath = tokenPath ? await realpath(resolve(tokenPath)).catch(() => resolve(tokenPath)) : '';
-function containsPath(root, target) {
-  const child = relative(resolve(root), target);
-  return child === '' || (!child.startsWith(`..${sep}`) && child !== '..' && !isAbsolute(child));
-}
-if (resolvedTokenPath && (containsPath(canonicalWorkspace, resolvedTokenPath) || containsPath(canonicalInstallDirectory, resolvedTokenPath))) {
-  throw new Error('NESTBOX_HOST_TOKEN_FILE must be outside the workspace and Nestbox installation.');
-}
-const fileToken = resolvedTokenPath ? await readFile(resolvedTokenPath, 'utf8').then(value => value.trim(), () => '') : '';
-const hostToken = fileToken;
-if (hostToken.length < 32) throw new Error('NESTBOX_HOST_TOKEN_FILE must contain a token of at least 32 characters.');
-
-const runnerId = randomUUID();
+const hostPlatform = platform();
+const hostName = hostname();
+// Stable for this runner process; each Docker Compose exec gets a new session ID.
+const runnerId = `runner-${randomUUID()}`;
 const once = process.argv.slice(2).includes('--once');
 const jsonOutput = process.argv.slice(2).includes('--json');
+const dockerExecutable = process.env.NESTBOX_HOST_DOCKER || 'docker';
+const dockerPrefixArgs = process.env.NESTBOX_HOST_DOCKER_ARGS ? JSON.parse(process.env.NESTBOX_HOST_DOCKER_ARGS) : [];
+if (!Array.isArray(dockerPrefixArgs) || !dockerPrefixArgs.every(value => typeof value === 'string')) throw new Error('NESTBOX_HOST_DOCKER_ARGS must be a JSON string array.');
 const npmExecutable = process.env.NESTBOX_HOST_NPM || 'npm';
 const npmCli = process.env.npm_execpath || (!process.env.NESTBOX_HOST_NPM && process.platform === 'win32' ? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js') : '');
 const maximumOutputBytes = Number(process.env.NESTBOX_HOST_MAX_OUTPUT_BYTES || 4 * 1024 * 1024);
 const approvalTtlMs = Number(process.env.NESTBOX_HOST_APPROVAL_TTL_MS || 5 * 60 * 1000);
 const approvalMaximumAttempts = Number(process.env.NESTBOX_HOST_APPROVAL_ATTEMPTS || 3);
 const maximumPendingApprovals = Number(process.env.NESTBOX_HOST_APPROVAL_MAX_PENDING || 20);
-const hostPlatform = platform();
-const hostName = hostname();
 const approvals = new Map();
 const activeChildren = new Set();
-let heartbeatTimer;
+let activeBridge;
 let stopping = false;
-let shutdownDeadline = 0;
+let announced = false;
+let activeJobId;
+let activeJobPromise;
+let retainedResult;
 
 function emit(type, fields = {}) {
   const event = { ...fields, type, timestamp: new Date().toISOString() };
   if (jsonOutput) return process.stdout.write(`${JSON.stringify(event)}\n`);
-  if (type === 'runner.ready') console.log(`Nestbox host runner connected to ${controlUrl} for ${workspace}`);
+  if (type === 'runner.ready') console.log(`Nestbox host runner connected through Docker Compose for ${workspace}`);
   else if (type === 'npm.scripts.confirmation_required') {
     console.log(`\nApproval ${event.requestId}: ${event.operation} npm script "${event.name}"`);
     if (event.command !== undefined) console.log(`Command: ${event.command}`);
     console.log(`Confirmation code: ${event.code} (expires ${event.expiresAt})\n`);
   } else if (type === 'npm.scripts.changed') console.log(`Approved ${event.operation} for npm script "${event.name}".`);
   else if (type === 'runner.error') console.error(event.error);
-}
-
-function headers(json = false) {
-  return {
-    Authorization: `Bearer ${hostToken}`,
-    'X-Nestbox-Runner-Id': runnerId,
-    'X-Nestbox-Runner-Pid': String(process.pid),
-    'X-Nestbox-Runner-Platform': hostPlatform,
-    'X-Nestbox-Runner-Host': hostName,
-    ...(json ? { 'Content-Type': 'application/json' } : {}),
-  };
-}
-
-async function controlRequest(method, path, body, timeoutMs = 35000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(controlUrl + path, {
-      method,
-      headers: headers(body !== undefined),
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    const value = text ? JSON.parse(text) : null;
-    if (!response.ok) {
-      const error = new Error(`Control ${method} ${path} returned ${response.status}: ${JSON.stringify(value)}`);
-      error.status = response.status;
-      throw error;
-    }
-    return { status: response.status, value };
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function packageText() { return readFile(join(workspace, 'package.json'), 'utf8'); }
@@ -236,57 +175,140 @@ async function stopChildren() {
   })));
 }
 
+function sendBridge(child, message) {
+  if (!child.stdin.writable) throw new Error('The Docker Compose bridge input closed unexpectedly.');
+  child.stdin.write(`${JSON.stringify({ protocolVersion: 1, ...message })}\n`);
+}
+
+function bridgeSession() {
+  const sessionId = randomUUID();
+  const args = [...dockerPrefixArgs, 'compose', 'exec', '-T', 'control', '/usr/local/bin/nestbox-host-bridge'];
+  const child = spawn(dockerExecutable, args, { cwd: installDirectory, env: process.env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+  activeBridge = child;
+  let diagnostics = '', buffer = '', settled = false;
+  const finish = (resolveSession, rejectSession, error, value) => {
+    if (settled) return;
+    settled = true;
+    if (activeBridge === child) activeBridge = undefined;
+    error ? rejectSession(error) : resolveSession(value);
+  };
+  return new Promise((resolveSession, rejectSession) => {
+    child.stdin.on('error', () => {});
+    child.stderr.on('data', chunk => {
+      diagnostics = (diagnostics + chunk.toString('utf8')).slice(-65536);
+      if (!jsonOutput) process.stderr.write(chunk);
+    });
+    child.stdout.on('data', chunk => {
+      buffer += chunk.toString('utf8');
+      if (Buffer.byteLength(buffer) > 64 * 1024 * 1024) {
+        child.stdin.end();
+        finish(resolveSession, rejectSession, new Error('The host bridge protocol line exceeded 64 MiB.'));
+        return;
+      }
+      let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message;
+        try { message = JSON.parse(line); }
+        catch { finish(resolveSession, rejectSession, new Error('The host bridge returned invalid JSON.')); child.stdin.end(); return; }
+        if (message?.protocolVersion !== 1 || typeof message.type !== 'string') {
+          finish(resolveSession, rejectSession, new Error('The host bridge returned an unsupported protocol message.')); child.stdin.end(); return;
+        }
+        if (message.type === 'ready') {
+          if (!announced) {
+            announced = true;
+            emit('runner.ready', { workspace, pid: process.pid, platform: hostPlatform, hostname: hostName });
+          }
+        } else if (message.type === 'idle' && once && !retainedResult && !activeJobPromise) {
+          child.stdin.end();
+          finish(resolveSession, rejectSession, null, { done: true });
+        } else if (message.type === 'job') {
+          const job = message.job;
+          if (retainedResult) {
+            if (job?.jobId !== retainedResult.jobId) { finish(resolveSession, rejectSession, new Error('The bridge assigned new work before acknowledging the previous result.')); child.stdin.end(); }
+            else sendBridge(child, { type: 'result', result: retainedResult });
+            continue;
+          }
+          if (activeJobPromise && activeJobId !== job?.jobId) {
+            finish(resolveSession, rejectSession, new Error('The bridge assigned new work while another host job was still running.')); child.stdin.end(); continue;
+          }
+          if (!activeJobPromise) {
+            activeJobId = job?.jobId;
+            activeJobPromise = Promise.resolve().then(async () => {
+              if (stopping) {
+                const timestamp = new Date().toISOString();
+                return { jobId: job?.jobId, exitCode: 1, stdout: '', stderr: 'The host runner stopped before executing the assigned job.', pid: null, hostPlatform, hostName, interrupted: true, startedAt: timestamp, completedAt: timestamp };
+              }
+              try { return await execute(job); }
+              catch (error) { return { jobId: job?.jobId, exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error), pid: null, hostPlatform, hostName, startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }; }
+            }).then(result => {
+              retainedResult = result;
+              activeJobId = undefined;
+              activeJobPromise = undefined;
+              return result;
+            });
+          }
+          activeJobPromise.then(result => { if (!settled) sendBridge(child, { type: 'result', result }); }).catch(error => {
+            child.stdin.end();
+            finish(resolveSession, rejectSession, error);
+          });
+        } else if (message.type === 'result.ack') {
+          if (!retainedResult || message.jobId !== retainedResult.jobId) { finish(resolveSession, rejectSession, new Error('The bridge acknowledged an unknown result.')); child.stdin.end(); return; }
+          retainedResult = undefined;
+          if (once) { child.stdin.end(); finish(resolveSession, rejectSession, null, { done: true }); }
+        } else if (message.type === 'gone') {
+          if (retainedResult?.jobId === message.jobId) retainedResult = undefined;
+          emit('runner.error', { jobId: message.jobId, error: message.error || 'The assigned host job is no longer available.' });
+          if (once) { child.stdin.end(); finish(resolveSession, rejectSession, null, { done: true }); }
+        } else if (message.type === 'result.rejected') {
+          if (retainedResult?.jobId === message.jobId) retainedResult = undefined;
+          emit('runner.error', { jobId: message.jobId, error: message.error || 'Control rejected the retained host result.' });
+          if (once) { child.stdin.end(); finish(resolveSession, rejectSession, null, { done: true }); }
+        }
+      }
+    });
+    child.once('error', error => finish(resolveSession, rejectSession, new Error(`Unable to start Docker Compose: ${error.message}`)));
+    child.once('close', code => {
+      if (settled) return;
+      const stale = /nestbox-host-bridge|not found|no such file/i.test(diagnostics) || code === 126 || code === 127;
+      const message = stale
+        ? 'The control image is stale or missing the Nestbox host bridge. Run `docker compose build control` and `docker compose up -d control`, then retry.'
+        : `Docker Compose host bridge exited with code ${code}${diagnostics.trim() ? `: ${diagnostics.trim()}` : ''}`;
+      const error = new Error(message);
+      if (stale) error.code = 'STALE_CONTROL_IMAGE';
+      finish(resolveSession, rejectSession, stopping ? null : error, { done: stopping });
+    });
+    sendBridge(child, { type: 'hello', runnerId, sessionId, metadata: { pid: process.pid, platform: hostPlatform, hostname: hostName }, ...(retainedResult ? { retainedResult } : {}) });
+  });
+}
+
 async function main() {
-  let announced = false;
   let backoffMs = 500;
   while (!stopping) {
     try {
-      await controlRequest('POST', '/host/heartbeat', {});
-      if (!announced) {
-        announced = true;
-        heartbeatTimer = setInterval(() => controlRequest('POST', '/host/heartbeat', {}).catch(error => emit('runner.error', { error: error.message })), 2000);
-        emit('runner.ready', { workspace, controlUrl, pid: process.pid, platform: hostPlatform, hostname: hostName });
-      }
-      const response = await controlRequest('GET', '/host/jobs/next?timeout=25', undefined, 35000);
+      const session = bridgeSession();
+      const outcome = await session;
       backoffMs = 500;
-      if (response.status === 204) {
-        if (once) break;
-        continue;
-      }
-      const job = response.value;
-      let result;
-      if (stopping) {
-        const timestamp = new Date().toISOString();
-        result = { jobId: job?.jobId, exitCode: 1, stdout: '', stderr: 'The host runner stopped before executing the assigned job.', pid: null, hostPlatform, hostName, interrupted: true, startedAt: timestamp, completedAt: timestamp };
-      }
-      else try { result = await execute(job); }
-      catch (error) { const message = error instanceof Error ? error.message : String(error); result = { jobId: job?.jobId, exitCode: 1, stdout: '', stderr: message, pid: null, hostPlatform, hostName, startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }; }
-      do {
-        try {
-          await controlRequest('POST', `/host/jobs/${encodeURIComponent(result.jobId)}/result`, result);
-          break;
-        } catch (error) {
-          if (error.status && error.status < 500) { emit('runner.error', { error: error.message }); break; }
-          await new Promise(resolveWait => setTimeout(resolveWait, backoffMs));
-          backoffMs = Math.min(10000, backoffMs * 2);
-        }
-      } while (!stopping || Date.now() < shutdownDeadline);
-      if (once) break;
+      if (outcome?.done) break;
     } catch (error) {
-      if (error.status === 401) throw error;
+      if (error.code === 'STALE_CONTROL_IMAGE') throw error;
       emit('runner.error', { error: `${error.message}; reconnecting` });
       await new Promise(resolveWait => setTimeout(resolveWait, backoffMs));
       backoffMs = Math.min(10000, backoffMs * 2);
     }
   }
-  clearInterval(heartbeatTimer);
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
   if (stopping) return;
   stopping = true;
-  shutdownDeadline = Date.now() + 5000;
-  clearInterval(heartbeatTimer);
+  activeBridge?.stdin.end();
+  const bridge = activeBridge;
+  if (bridge?.pid) setTimeout(() => {
+    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(bridge.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
+    else try { process.kill(-bridge.pid, 'SIGTERM'); } catch {}
+  }, 2000).unref();
   stopChildren().catch(error => emit('runner.error', { error: error.message || String(error) }));
 });
-main().catch(error => { emit('runner.error', { error: error.message || String(error) }); clearInterval(heartbeatTimer); stopChildren().finally(() => process.exit(1)); });
+main().catch(error => { emit('runner.error', { error: error.message || String(error) }); stopChildren().finally(() => process.exit(1)); });

@@ -1,21 +1,14 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cp, mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
-
-function containsPath(root, target) {
-  const child = relative(resolve(root), resolve(target));
-  return child === '' || (!child.startsWith(`..${sep}`) && child !== '..' && !isAbsolute(child));
-}
 
 const copyEntries = [
   'docker',
@@ -227,22 +220,6 @@ async function configureHostPackage(installDir, workspaceDir, layout) {
     private: true,
     scripts
   }, null, 2)}\n`, 'utf8');
-  const envPath = join(installDir, '.env');
-  const token = randomBytes(32).toString('hex');
-  const stateBase = process.env.NESTBOX_CREATOR_STATE_ROOT
-    || process.env.LOCALAPPDATA
-    || process.env.XDG_STATE_HOME
-    || (process.platform === 'darwin' ? join(homedir(), 'Library', 'Application Support') : join(homedir(), '.local', 'state'));
-  const tokenDirectory = join(stateBase, 'nestbox', 'host-control');
-  await mkdir(tokenDirectory, { recursive: true });
-  const tokenPath = join(await realpath(tokenDirectory), `${randomUUID()}.token`);
-  const canonicalWorkspace = await realpath(workspaceDir);
-  const canonicalInstall = await realpath(installDir);
-  if (containsPath(canonicalWorkspace, tokenPath) || containsPath(canonicalInstall, tokenPath)) throw new Error('Host token state directory must be outside the workspace and Nestbox installation.');
-  await writeFile(tokenPath, `${token}\n`, { encoding: 'utf8', mode: 0o600 });
-  const composeTokenPath = tokenPath.replaceAll('\\', '/');
-  const configuredEnv = (await readFile(envPath, 'utf8')).replace(/^NESTBOX_HOST_TOKEN_FILE=.*\r?$/m, () => `NESTBOX_HOST_TOKEN_FILE=${composeTokenPath}`);
-  await writeFile(envPath, configuredEnv, 'utf8');
 }
 
 function commandExists(command) {

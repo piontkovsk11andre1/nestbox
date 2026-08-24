@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
+import hashlib
 import http.client
-import hmac
 import json
 import os
 import re
@@ -17,12 +17,6 @@ DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
 WORKSPACE_PATH = os.environ.get("WORKSPACE_PATH", "/workspace")
 PROJECT_NAME = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
 SERVICE_NAME = os.environ.get("NESTBOX_CONTROL_SERVICE", "control")
-HOST_TOKEN_FILE = os.environ.get("NESTBOX_HOST_TOKEN_FILE", "/run/secrets/nestbox-host-token")
-try:
-    with open(HOST_TOKEN_FILE, encoding="utf-8") as token_stream:
-        HOST_TOKEN = token_stream.read().strip()
-except OSError:
-    HOST_TOKEN = ""
 HOST_TIMEOUT = int(os.environ.get("NESTBOX_HOST_RUNNER_TIMEOUT", "3600"))
 HOST_HEARTBEAT_TTL = int(os.environ.get("NESTBOX_HOST_RUNNER_HEARTBEAT_TTL", "10"))
 HOST_LONG_POLL_TIMEOUT = int(os.environ.get("NESTBOX_HOST_LONG_POLL_TIMEOUT", "25"))
@@ -206,10 +200,16 @@ class HostBroker:
         self.pending = []
         self.jobs = {}
         self.runner = {}
+        self.gone = {}
 
-    def touch(self, runner_id, headers):
+    def _validate_ids(self, runner_id, session_id):
         if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", runner_id):
             raise ValueError("invalid runner ID")
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", session_id):
+            raise ValueError("invalid session ID")
+
+    def connect(self, runner_id, session_id, metadata):
+        self._validate_ids(runner_id, session_id)
         now = time.monotonic()
         with self.condition:
             active_id = self.runner.get("id")
@@ -228,11 +228,20 @@ class HostBroker:
                         }
             self.runner = {
                 "id": runner_id,
+                "sessionId": session_id,
                 "seen": now,
-                "pid": headers.get("X-Nestbox-Runner-Pid"),
-                "platform": headers.get("X-Nestbox-Runner-Platform"),
-                "hostname": headers.get("X-Nestbox-Runner-Host"),
+                "pid": metadata.get("pid"),
+                "platform": metadata.get("platform"),
+                "hostname": metadata.get("hostname"),
             }
+            self.condition.notify_all()
+
+    def touch(self, runner_id, session_id):
+        self._validate_ids(runner_id, session_id)
+        with self.condition:
+            if self.runner.get("id") != runner_id or self.runner.get("sessionId") != session_id:
+                raise PermissionError("host runner session was superseded")
+            self.runner["seen"] = time.monotonic()
             self.condition.notify_all()
 
     def status(self):
@@ -256,14 +265,16 @@ class HostBroker:
             self.pending.append(job["jobId"])
             self.condition.notify_all()
 
-    def next(self, runner_id, headers, timeout):
+    def next(self, runner_id, session_id, timeout):
         deadline = time.monotonic() + timeout
         with self.condition:
             while True:
-                if self.runner.get("id") != runner_id:
-                    raise PermissionError("another host runner is active")
-                if time.monotonic() - self.runner.get("seen", 0) > HOST_HEARTBEAT_TTL:
-                    return None
+                if self.runner.get("id") != runner_id or self.runner.get("sessionId") != session_id:
+                    raise PermissionError("host runner session was superseded")
+                self.runner["seen"] = time.monotonic()
+                for record in self.jobs.values():
+                    if record.get("runnerId") == runner_id and record.get("result") is None:
+                        return record["job"]
                 if self.pending:
                     identifier = self.pending.pop(0)
                     record = self.jobs.get(identifier)
@@ -275,13 +286,28 @@ class HostBroker:
                     return None
                 self.condition.wait(min(1, remaining))
 
-    def complete(self, runner_id, identifier, result):
+    def complete(self, runner_id, session_id, identifier, result):
         with self.condition:
+            if self.runner.get("id") != runner_id or self.runner.get("sessionId") != session_id:
+                raise PermissionError("host runner session was superseded")
+            serialized = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            fingerprint = hashlib.sha256(serialized).hexdigest()
             record = self.jobs.get(identifier)
-            if not record or record.get("runnerId") != runner_id:
-                raise ValueError("host job is unknown or belongs to another runner")
+            terminal = self.gone.get(identifier)
+            if not record and terminal:
+                if terminal.get("fingerprint") == fingerprint:
+                    return True
+                if terminal.get("fingerprint"):
+                    raise RuntimeError("conflicting host result replay")
+                raise FileNotFoundError(terminal["error"])
+            if not record:
+                raise FileNotFoundError("host job is no longer available")
+            if record.get("runnerId") != runner_id:
+                raise ValueError("host job belongs to another runner")
             if record.get("result") is not None:
-                raise ValueError("host job already has a result")
+                if record.get("fingerprint") == fingerprint:
+                    return True
+                raise RuntimeError("conflicting host result replay")
             if result.get("jobId") != identifier:
                 raise ValueError("host result contains a mismatched job ID")
             job = record["job"]
@@ -298,6 +324,31 @@ class HostBroker:
                 if result.get("status") != "success" and not isinstance(result.get("exitCode"), int):
                     raise ValueError("invalid script confirmation result")
             record["result"] = result
+            record["fingerprint"] = fingerprint
+            self.condition.notify_all()
+            return False
+
+    def _remember(self, identifier, record=None, error="host job is gone"):
+        self.gone[identifier] = {
+            "fingerprint": record.get("fingerprint") if record else None,
+            "error": error,
+            "time": time.monotonic(),
+        }
+        while len(self.gone) > MAX_HOST_JOBS:
+            del self.gone[next(iter(self.gone))]
+
+    def reject(self, runner_id, identifier, error):
+        with self.condition:
+            record = self.jobs.get(identifier)
+            if not record or record.get("runnerId") != runner_id or record.get("result") is not None:
+                return
+            record["result"] = {
+                "jobId": identifier,
+                "exitCode": 1,
+                "stdout": "",
+                "stderr": f"Host result was rejected: {error}",
+                "interrupted": True,
+            }
             self.condition.notify_all()
 
     def wait(self, identifier, timeout=HOST_TIMEOUT):
@@ -305,33 +356,31 @@ class HostBroker:
         with self.condition:
             while True:
                 record = self.jobs.get(identifier)
-                if record and record.get("runnerId") and record.get("result") is None:
-                    owner = record["runnerId"]
-                    if self.runner.get("id") != owner or time.monotonic() - self.runner.get("seen", 0) > HOST_HEARTBEAT_TTL:
+                if record and record.get("result") is None:
+                    age = time.monotonic() - self.runner.get("seen", 0) if self.runner else float("inf")
+                    owner = record.get("runnerId")
+                    lost_owner = bool(owner and self.runner.get("id") != owner)
+                    if lost_owner or age > HOST_HEARTBEAT_TTL:
                         record["result"] = {
                             "jobId": identifier,
                             "exitCode": 1,
                             "stdout": "",
-                            "stderr": "The assigned host runner disconnected before returning a result.",
+                            "stderr": "The assigned host runner disconnected before returning a result." if owner else "The host runner disconnected before accepting the job.",
                             "interrupted": True,
                         }
-                elif record and record.get("result") is None and self.runner and time.monotonic() - self.runner.get("seen", 0) > HOST_HEARTBEAT_TTL:
-                    record["result"] = {
-                        "jobId": identifier,
-                        "exitCode": 1,
-                        "stdout": "",
-                        "stderr": "The host runner disconnected before accepting the job.",
-                        "interrupted": True,
-                    }
                 if record and record.get("result") is not None:
                     result = record["result"]
                     del self.jobs[identifier]
+                    if identifier in self.pending:
+                        self.pending.remove(identifier)
+                    self._remember(identifier, record)
                     return result
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    self.jobs.pop(identifier, None)
+                    expired = self.jobs.pop(identifier, None)
                     if identifier in self.pending:
                         self.pending.remove(identifier)
+                    self._remember(identifier, expired, f"host job expired after {timeout} seconds")
                     raise TimeoutError(f"host runner did not finish within {timeout} seconds")
                 self.condition.wait(min(1, remaining))
 
@@ -372,7 +421,7 @@ def valid_command(command):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "nestbox-control/0.4"
+    server_version = "nestbox-control/0.5"
 
     def setup(self):
         super().setup()
@@ -560,7 +609,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class HostHandler(BaseHTTPRequestHandler):
-    server_version = "nestbox-host-control/0.4"
+    server_version = "nestbox-host-control/0.5"
 
     def setup(self):
         super().setup()
@@ -577,13 +626,11 @@ class HostHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def authorized(self):
-        supplied = self.headers.get("Authorization", "")
-        expected = f"Bearer {HOST_TOKEN}"
-        return hmac.compare_digest(supplied.encode(), expected.encode())
-
     def runner(self):
         return self.headers.get("X-Nestbox-Runner-Id", "")
+
+    def session(self):
+        return self.headers.get("X-Nestbox-Session-Id", "")
 
     def body(self):
         if self.headers.get("Transfer-Encoding"):
@@ -596,12 +643,9 @@ class HostHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be a JSON object")
         return value
 
-    def authenticate(self):
-        if not self.authorized():
-            self.send_json(401, {"error": "invalid host runner token"})
-            return False
+    def active_session(self):
         try:
-            HOST_BROKER.touch(self.runner(), self.headers)
+            HOST_BROKER.touch(self.runner(), self.session())
             return True
         except PermissionError as error:
             self.send_json(409, {"error": str(error)})
@@ -612,26 +656,36 @@ class HostHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/host/health":
-            if not self.authenticate(): return
+            if not self.active_session(): return
             self.send_json(200, {"ok": True, "hostRunner": host_status()})
             return
         if parsed.path == "/host/jobs/next":
-            if not self.authenticate(): return
             try:
                 requested = int((parse_qs(parsed.query).get("timeout") or [HOST_LONG_POLL_TIMEOUT])[0])
                 timeout = max(1, min(HOST_LONG_POLL_TIMEOUT, requested))
-                job = HOST_BROKER.next(self.runner(), self.headers, timeout)
+                job = HOST_BROKER.next(self.runner(), self.session(), timeout)
                 if job is None:
                     self.send_response(204); self.end_headers(); return
                 self.send_json(200, job)
+            except PermissionError as error:
+                self.send_json(409, {"error": str(error)})
             except (TypeError, ValueError) as error:
                 self.send_json(400, {"error": str(error)})
             return
         self.send_json(404, {"error": "not found"})
 
     def do_POST(self):
-        if not self.authenticate(): return
         path = urlparse(self.path).path
+        if path == "/host/connect":
+            try:
+                HOST_BROKER.connect(self.runner(), self.session(), self.body())
+                self.send_json(200, {"ok": True})
+            except PermissionError as error:
+                self.send_json(409, {"error": str(error)})
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if not self.active_session(): return
         if path == "/host/heartbeat":
             self.send_json(200, {"ok": True})
             return
@@ -640,18 +694,23 @@ class HostHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "not found"}); return
         try:
             result = self.body()
-            HOST_BROKER.complete(self.runner(), match.group(1), result)
-            self.send_json(202, {"accepted": True})
+            duplicate = HOST_BROKER.complete(self.runner(), self.session(), match.group(1), result)
+            self.send_json(202, {"accepted": True, "duplicate": duplicate})
+        except FileNotFoundError as error:
+            self.send_json(410, {"error": str(error), "jobId": match.group(1)})
+        except PermissionError as error:
+            self.send_json(409, {"error": str(error)})
+        except RuntimeError as error:
+            self.send_json(409, {"error": str(error)})
         except ValueError as error:
+            HOST_BROKER.reject(self.runner(), match.group(1), str(error))
             self.send_json(400, {"error": str(error)})
 
 
 def main():
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", PROJECT_NAME):
         raise SystemExit("COMPOSE_PROJECT_NAME must be a non-empty lowercase project slug")
-    if len(HOST_TOKEN) < 32:
-        raise SystemExit("NESTBOX_HOST_TOKEN_FILE must contain a token of at least 32 characters")
-    host_server = ThreadingHTTPServer(("0.0.0.0", 4089), HostHandler)
+    host_server = ThreadingHTTPServer(("127.0.0.1", 4089), HostHandler)
     threading.Thread(target=host_server.serve_forever, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("NESTBOX_CONTROL_PORT", "4088"))), Handler).serve_forever()
 

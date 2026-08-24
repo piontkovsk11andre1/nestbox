@@ -11,6 +11,7 @@ const requiredPaths = [
   'docker/rollup/Dockerfile',
   'docker/control/Dockerfile',
   'docker/control/server.py',
+  'docker/control/host_bridge.py',
   'host-runner.mjs',
   'package.host.json',
   'CHANGELOG.md',

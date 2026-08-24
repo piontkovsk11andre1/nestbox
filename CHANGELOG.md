@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Replace the public token-authenticated host API with a persistent `docker compose exec -T control` stdio bridge.
+- Bind the bridge API to container loopback and add reconnect-safe runner sessions with idempotent result replay.
+- Remove host tokens, the Nginx host proxy, and all `4089` exposure while retaining one Nginx-published host port.
+- Existing `0.3.x` and `0.4.x` installations may remove `NESTBOX_HOST_TOKEN_FILE` and its referenced token file after upgrading.
+
 ## 0.4.0
 
 - Route the authenticated host runner through `/_nestbox/host/` on the existing Nginx gateway.

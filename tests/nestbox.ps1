@@ -91,11 +91,6 @@ function Invoke-Http([string]$Path, [string]$HostHeader = '', [string]$Method = 
 
 try {
     New-Item -ItemType Directory -Path $TempDirectory | Out-Null
-    $configuredTokenFile = [regex]::Match([IO.File]::ReadAllText((Join-Path $Root '.env')), '(?m)^NESTBOX_HOST_TOKEN_FILE=(.+)$').Groups[1].Value.Trim()
-    if (-not $env:NESTBOX_HOST_TOKEN_FILE -and -not $configuredTokenFile) {
-        $env:NESTBOX_HOST_TOKEN_FILE = Join-Path $TempDirectory 'host-token'
-        [IO.File]::WriteAllText($env:NESTBOX_HOST_TOKEN_FILE, 'test-token-' + ('0' * 54))
-    }
 
     if (Get-Command docker -ErrorAction SilentlyContinue) { Pass 'docker is available' } else { Fail 'docker is required'; throw 'Missing Docker' }
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) { Pass 'curl.exe is available' } else { Fail 'curl.exe is required'; throw 'Missing curl.exe' }
@@ -126,7 +121,7 @@ try {
     $openCodeConfig = [IO.File]::ReadAllText((Join-Path $Root 'home\configs\opencode\opencode.json'))
     if ($openCodeConfig.Contains('"instance.md"')) { Pass 'OpenCode loads instance policy directly' } else { Fail 'OpenCode does not load instance policy' }
     if ($openCodeConfig.Contains('"control"')) { Pass 'OpenCode registers the control MCP' } else { Fail 'OpenCode does not register the control MCP' }
-    if ((Test-Path -LiteralPath (Join-Path $Root 'docker\control\server.py')) -and (Test-Path -LiteralPath (Join-Path $Root 'host-runner.mjs'))) { Pass 'Control and host runner sources exist' } else { Fail 'Control or host runner source is missing' }
+    if ((Test-Path -LiteralPath (Join-Path $Root 'docker\control\server.py')) -and (Test-Path -LiteralPath (Join-Path $Root 'docker\control\host_bridge.py')) -and (Test-Path -LiteralPath (Join-Path $Root 'host-runner.mjs'))) { Pass 'Control and host runner sources exist' } else { Fail 'Control or host runner source is missing' }
 
     $result = Invoke-Compose @('config', '--quiet') -Quiet
     if ($result.Code -eq 0) { Pass 'Compose configuration is valid' } else { Fail 'Compose configuration is invalid' }
@@ -254,14 +249,14 @@ try {
     if ($null -eq $controlInspect.NetworkSettings.Ports.'4088/tcp') { Pass 'Control API is not published on the host' } else { Fail 'Control API is published on the host' }
     $runnerBinding = $controlInspect.NetworkSettings.Ports.'4089/tcp'
     if ($null -eq $runnerBinding) { Pass 'Host runner API is not published separately' } else { Fail 'Host runner API is published separately' }
+    if ($null -eq $controlInspect.Config.ExposedPorts.'4089/tcp') { Pass 'Host runner API is not exposed by the control image' } else { Fail 'Host runner API is exposed by the control image' }
     $response = Invoke-Http '/_nestbox/host/health'
-    if ($response.Status -eq 401) { Pass 'Nginx routes the authenticated host runner API' } else { Fail "Host runner gateway returned HTTP $($response.Status) instead of 401" }
+    if ($response.Status -eq 404) { Pass 'Public host runner path is unavailable' } else { Fail "Host runner gateway returned HTTP $($response.Status) instead of 404" }
     $openCodeId = Get-ContainerId 'opencode'
     $openCodeInspect = @(& docker inspect $openCodeId 2>$null | ConvertFrom-Json)[0]
     if (@($openCodeInspect.Mounts.Destination) -notcontains '/var/run/docker.sock') { Pass 'OpenCode does not receive the Docker socket' } else { Fail 'OpenCode receives the Docker socket' }
-    if (@($openCodeInspect.Mounts.Destination) -notcontains '/run/secrets/nestbox-host-token' -and @($openCodeInspect.Config.Env) -notmatch '^NESTBOX_HOST_TOKEN=') { Pass 'OpenCode cannot read the host runner token' } else { Fail 'OpenCode can read the host runner token' }
     if (@($controlInspect.Mounts.Destination) -contains '/var/run/docker.sock') { Pass 'Control receives the Docker socket' } else { Fail 'Control does not receive the Docker socket' }
-    if (@($controlInspect.Mounts.Destination) -contains '/run/secrets/nestbox-host-token') { Pass 'Control receives the host runner token file' } else { Fail 'Control does not receive the host runner token file' }
+    if (@($controlInspect.Mounts.Destination) -notcontains '/run/secrets/nestbox-host-token' -and @($controlInspect.Config.Env) -notmatch '^NESTBOX_HOST_TOKEN') { Pass 'Control has no host token mount or environment' } else { Fail 'Control still has host token configuration' }
 
     if ($indexPresent) {
         $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-l', '/home/code/index.php') -Quiet

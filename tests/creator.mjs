@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -19,8 +19,8 @@ try {
   if (nestedPackage.name !== 'existing' || nestedPackage.scripts.build !== 'node build.mjs') throw new Error('Creator replaced existing package metadata.');
   if (nestedPackage.scripts.host !== 'node .nestbox/host-runner.mjs') throw new Error('Nested host script has the wrong path.');
   const nestedEnv = await readFile(join(nested, '.nestbox', '.env'), 'utf8');
-  const tokenPath = nestedEnv.match(/^NESTBOX_HOST_TOKEN_FILE=(.+)$/m)?.[1]?.trim();
-  if (!/^WORKSPACE_PATH=\.\.$/m.test(nestedEnv) || !tokenPath || !/^[a-f0-9]{64}$/.test((await readFile(tokenPath, 'utf8')).trim())) throw new Error('Nested runtime authentication was not configured.');
+  if (!/^WORKSPACE_PATH=\.\.$/m.test(nestedEnv) || /NESTBOX_HOST_TOKEN/.test(nestedEnv)) throw new Error('Nested runtime configuration still contains host token state.');
+  if ((await readdir(fixture)).includes('state')) throw new Error('Creator wrote external host state.');
   const npmCommand = process.env.npm_execpath ? process.execPath : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
   const npmArgs = process.env.npm_execpath ? [process.env.npm_execpath, 'run', 'test:host'] : ['run', 'test:host'];
   const nestedHostTest = spawnSync(npmCommand, npmArgs, { cwd: nested, encoding: 'utf8' });

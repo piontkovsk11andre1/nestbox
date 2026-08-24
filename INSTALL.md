@@ -101,8 +101,8 @@ Configure the host bridge in the workspace root before Compose starts:
 - For `.nestbox` layout, create `package.json` from `.nestbox/package.host.json` when absent, or merge only its `host` and `test:host` scripts into the existing manifest.
 - For direct layout, use `node host-runner.mjs` and `node tests/host-runner.mjs` for those scripts. A source clone's publisher-oriented `package.json` may be replaced by this installation manifest after preserving any intentional project metadata.
 - Never overwrite a conflicting script. Stop and ask for a different script name.
-- Set `NESTBOX_HOST_TOKEN_FILE` to a private file outside every container-mounted workspace. The npm creator writes a 64-character token there with owner-only permissions. Only `control` mounts the file; never paste the token into chat or expose it through a page.
-- Start `npm run host --` after `control` is healthy. The runner authenticates through `/_nestbox/host/` on the existing `WEB_PORT`, long-polls for work, sends heartbeats, and posts results without opening a host listener, publishing a second port, or sharing queue files.
+- Start `npm run host --` after `control` is healthy. The runner opens a persistent `docker compose exec -T control` stdio bridge from the installation directory. The image-resident helper sends heartbeats and job results through the server's container-loopback API without a host listener, token, published port, or shared queue files.
+- If the runner reports a stale control image, rebuild and recreate `control` with `docker compose build control` and `docker compose up -d control`.
 - The workspace manifest is mounted read-only in runtime containers. Confirmed changes are written only by the native host runner.
 
 Update the new `home/configs/opencode/instance.md` with:

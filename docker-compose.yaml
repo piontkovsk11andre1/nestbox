@@ -114,8 +114,6 @@ services:
       dockerfile: ./docker/control/Dockerfile
     expose:
       - "4088"
-      # Authenticated host-runner transport, proxied only through Nginx.
-      - "4089"
     volumes:
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
       - type: bind
@@ -124,16 +122,9 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - type: bind
-        source: ${NESTBOX_HOST_TOKEN_FILE:?NESTBOX_HOST_TOKEN_FILE must be configured}
-        target: /run/secrets/nestbox-host-token
-        read_only: true
-        bind:
-          create_host_path: false
     environment:
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
       - NESTBOX_CONTROL_SERVICE=control
-      - NESTBOX_HOST_TOKEN_FILE=/run/secrets/nestbox-host-token
       - NESTBOX_CONTROL_LOG_OUTPUT=${NESTBOX_CONTROL_LOG_OUTPUT:-text}
       - NESTBOX_CONTROL_LOG_MAX_BYTES=${NESTBOX_CONTROL_LOG_MAX_BYTES:-262144}
     healthcheck:
