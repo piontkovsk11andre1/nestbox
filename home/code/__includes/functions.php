@@ -192,6 +192,225 @@ function nestbox_opencode_request(string $method, string $path, array $body, str
     return json_decode($response, true, flags: JSON_THROW_ON_ERROR);
 }
 
+/** Read a positive integer setting for do-md; reject malformed configuration. */
+function nestbox_do_md_config_int(string $name, int $default): int
+{
+    $raw = getenv($name);
+    if ($raw === false || $raw === '') {
+        return $default;
+    }
+    $value = filter_var($raw, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($value === false) {
+        throw new UnexpectedValueException("$name must be a positive integer.");
+    }
+    return $value;
+}
+
+/** Send one bounded, non-retried HTTP request; return its status and API-v1 body. */
+function nestbox_do_md_request(string $method, string $path, ?array $body = null): array
+{
+    $baseUrl = rtrim((string) (getenv('NESTBOX_DO_MD_URL') ?: 'http://do-md:8080'), '/');
+    $url = parse_url($baseUrl);
+    if (!is_array($url) || !isset($url['host'], $url['scheme'])
+        || !in_array($url['scheme'], ['http', 'https'], true)
+        || isset($url['user']) || isset($url['pass'])
+        || isset($url['query']) || isset($url['fragment']) || preg_match('/[\0\r\n]/', $baseUrl)
+    ) {
+        throw new UnexpectedValueException('NESTBOX_DO_MD_URL must be an HTTP(S) URL without credentials, query, or fragment.');
+    }
+    $metadata = in_array($path, ['/healthz', '/v1/capabilities'], true);
+    $command = preg_match('#\A/v1/commands/[a-z]+\z#', $path) === 1;
+    if (!(($method === 'GET' && $metadata && $body === null) || ($method === 'POST' && $command && $body !== null))) {
+        throw new InvalidArgumentException('Invalid do-md request method, path, or body.');
+    }
+    $payload = $body === null ? null : json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    if ($payload !== null && strlen($payload) > 1048576) {
+        throw new InvalidArgumentException('do-md JSON request exceeds 1048576 bytes.');
+    }
+    $options = [
+        'method' => $method,
+        'header' => "Accept: application/json\r\nContent-Type: application/json",
+        'ignore_errors' => true,
+        'follow_location' => 0,
+        'max_redirects' => 0,
+        'timeout' => nestbox_do_md_config_int('NESTBOX_DO_MD_TIMEOUT_MS', 20000) / 1000 + 5,
+    ];
+    if ($payload !== null) {
+        $options['content'] = $payload;
+    }
+    // A disconnect can follow a committed write: do not retry or claim rollback.
+    $stream = @fopen($baseUrl . $path, 'rb', false, stream_context_create(['http' => $options]));
+    if ($stream === false) {
+        throw new RuntimeException('do-md connection failed; write outcome may be unknown. Request was not retried.');
+    }
+    try {
+        $response = stream_get_contents($stream, 8388609);
+        $metadata = stream_get_meta_data($stream);
+    } finally {
+        fclose($stream);
+    }
+    if ($response === false || ($metadata['timed_out'] ?? false) || strlen($response) > 8388608) {
+        throw new RuntimeException('do-md response timed out or exceeded 8388608 bytes; write outcome may be unknown. Request was not retried.');
+    }
+    $status = 0;
+    $contentType = '';
+    foreach ($metadata['wrapper_data'] ?? [] as $header) {
+        if (preg_match('#^HTTP/\S+\s+(\d{3})#i', $header, $matches)) {
+            $status = (int) $matches[1];
+            $contentType = '';
+        } elseif (stripos($header, 'Content-Type:') === 0) {
+            $contentType = trim(substr($header, strlen('Content-Type:')));
+        }
+    }
+    if ($status < 200 || ($status >= 300 && $status < 400) || $status >= 600 || !preg_match('#^application/json(?:;|$)#i', $contentType)) {
+        throw new RuntimeException("do-md returned an invalid response with HTTP status $status.");
+    }
+    try {
+        $decoded = json_decode($response, true, flags: JSON_THROW_ON_ERROR);
+    } catch (JsonException $error) {
+        throw new RuntimeException('do-md returned invalid JSON.', 0, $error);
+    }
+    if (!is_array($decoded) || array_is_list($decoded) || ($decoded['apiVersion'] ?? null) !== 1 || !is_bool($decoded['ok'] ?? null)) {
+        throw new UnexpectedValueException('do-md returned an incompatible or malformed API response.');
+    }
+    return ['status' => $status, 'body' => $decoded];
+}
+
+/** Check the default do-md service without touching documents. */
+function nestbox_do_md_health(): array
+{
+    $response = nestbox_do_md_request('GET', '/healthz');
+    if ($response['status'] !== 200 || !$response['body']['ok'] || !is_string($response['body']['version'] ?? null)) {
+        throw new RuntimeException('do-md is not healthy.');
+    }
+    return $response['body'];
+}
+
+/** Fetch the remote execution schemas and configured resource limits. */
+function nestbox_do_md_capabilities(): array
+{
+    $response = nestbox_do_md_request('GET', '/v1/capabilities');
+    if ($response['status'] !== 200 || !$response['body']['ok'] || !is_array($response['body']['commands'] ?? null)) {
+        throw new RuntimeException('do-md capabilities are unavailable.');
+    }
+    $names = array_column($response['body']['commands'], 'name');
+    foreach (['validate', 'export', 'create', 'set', 'render', 'match', 'query', 'reference'] as $name) {
+        if (!in_array($name, $names, true)) {
+            throw new UnexpectedValueException("do-md does not support $name.");
+        }
+    }
+    return $response['body'];
+}
+
+/** Execute one scoped operation; return domain/HTTP diagnostics, throw on transport errors. */
+function nestbox_do_md(string $command, array $params = [], string $directory = '/documents/workspace', array $limits = []): array
+{
+    if (!in_array($command, ['validate', 'export', 'create', 'set', 'render', 'match', 'query', 'reference'], true)) {
+        throw new InvalidArgumentException('Unknown do-md command.');
+    }
+    if ((!str_starts_with($directory, '/') && !preg_match('#^[A-Za-z]:/#', $directory)) || preg_match('/[\0\r\n]/', $directory)) {
+        throw new InvalidArgumentException('do-md directory must be an absolute server-side path.');
+    }
+    if ($params !== [] && array_is_list($params)) {
+        throw new InvalidArgumentException('do-md params must be an object.');
+    }
+    // Preserve JSON object semantics for empty PHP arrays in schema-object fields.
+    foreach (['data', 'patch', 'options'] as $field) {
+        if (isset($params[$field]) && is_array($params[$field])) {
+            if ($params[$field] !== [] && array_is_list($params[$field])) {
+                throw new InvalidArgumentException("do-md $field must be an object.");
+            }
+            $params[$field] = (object) $params[$field];
+        }
+    }
+    foreach ($limits as $name => $value) {
+        if (!in_array($name, ['timeoutMs', 'maxInputBytes', 'noSnippets'], true)
+            || ($name === 'noSnippets' ? !is_bool($value) : (!is_int($value) || $value < 1))
+        ) {
+            throw new InvalidArgumentException('Invalid do-md resource limit.');
+        }
+    }
+    $limits['timeoutMs'] = min($limits['timeoutMs'] ?? PHP_INT_MAX, nestbox_do_md_config_int('NESTBOX_DO_MD_TIMEOUT_MS', 20000));
+    $response = nestbox_do_md_request('POST', '/v1/commands/' . $command, [
+        'directory' => $directory, 'params' => (object) $params, 'limits' => (object) $limits,
+    ]);
+    $result = $response['body'];
+    if (!is_int($result['exitCode'] ?? null) || $result['exitCode'] < 0 || $result['exitCode'] > 4
+        || !is_array($result['errors'] ?? null) || !array_is_list($result['errors'])
+        || ($result['ok'] && ($response['status'] !== 200 || $result['exitCode'] !== 0 || $result['errors'] !== []))
+        || (!$result['ok'] && ($result['exitCode'] === 0 || $result['errors'] === []))
+    ) {
+        throw new UnexpectedValueException('do-md returned a malformed command result.');
+    }
+    foreach ($result['errors'] as $error) {
+        if (!is_array($error) || !is_string($error['code'] ?? null) || !is_string($error['message'] ?? null)) {
+            throw new UnexpectedValueException('do-md returned malformed diagnostics.');
+        }
+    }
+    if ($result['ok']) {
+        $valid = match ($command) {
+            'create', 'set', 'render' => is_string($result['output'] ?? null)
+                && array_key_exists('wrote', $result) && ($result['wrote'] === null || is_string($result['wrote'])),
+            'export' => is_array($result['context'] ?? null),
+            'match', 'query' => is_array($result['matches'] ?? null) && array_is_list($result['matches']),
+            'reference' => is_array($result['reference'] ?? null) || is_string($result['reference'] ?? null),
+            default => true,
+        };
+        if (!$valid) {
+            throw new UnexpectedValueException('do-md returned malformed command output.');
+        }
+    }
+    return $result;
+}
+
+/** Validate a document through the shared do-md backend. */
+function nestbox_do_md_validate(array $params, string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('validate', $params, $directory, $limits);
+}
+
+/** Export context inline or to the optional server-side savePath. */
+function nestbox_do_md_export(array $params, string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('export', $params, $directory, $limits);
+}
+
+/** Create Markdown inline or at the optional server-side file. */
+function nestbox_do_md_create(array $params, string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('create', $params, $directory, $limits);
+}
+
+/** Apply a document mutation; dryRun returns output without writing. */
+function nestbox_do_md_set(array $params, string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('set', $params, $directory, $limits);
+}
+
+/** Parse and render with two templates, optionally without writing. */
+function nestbox_do_md_render(array $params, string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('render', $params, $directory, $limits);
+}
+
+/** Find full-document template matches inside the selected directory. */
+function nestbox_do_md_match(array $params, string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('match', $params, $directory, $limits);
+}
+
+/** Find partial-document regions inside the selected directory. */
+function nestbox_do_md_query(array $params, string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('query', $params, $directory, $limits);
+}
+
+/** Read the executing version's reference or one function entry. */
+function nestbox_do_md_reference(array $params = [], string $directory = '/documents/workspace', array $limits = []): array
+{
+    return nestbox_do_md('reference', $params, $directory, $limits);
+}
+
 /** Send a bounded JSON request to the private, label-gated control service. */
 function nestbox_control_request(string $method, string $path, array $body = []): mixed
 {

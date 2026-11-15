@@ -1,6 +1,6 @@
 {
   "name": "@p10i/create-nestbox",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Create Nestbox projects.",
   "license": "MIT",
   "type": "module",
@@ -29,11 +29,14 @@
     "!home/code/scripts-bundle.css"
   ],
   "scripts": {
-    "test": "node tests/control.mjs && node tests/creator.mjs",
+    "test": "node tests/control.mjs && node tests/creator.mjs && node --test tests/do-md.test.mjs",
     "prepack": "node scripts/check-package.js"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "@p10i/do-md": "^1.4.0"
   },
   "publishConfig": {
     "access": "public"

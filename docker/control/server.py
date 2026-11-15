@@ -176,7 +176,7 @@ def valid_command(command):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "nestbox-control/0.6"
+    server_version = "nestbox-control/0.7"
 
     def setup(self):
         super().setup()

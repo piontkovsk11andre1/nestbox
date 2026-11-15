@@ -170,7 +170,7 @@ else
 fi
 
 services="$(compose config --services 2>/dev/null || true)"
-for service in nginx php-fpm rollup control opencode; do
+for service in nginx php-fpm rollup control do-md opencode; do
     if grep -qx "$service" <<<"$services"; then
         pass "Compose defines $service"
     else
@@ -186,7 +186,7 @@ while IFS= read -r service; do
 done <<<"$running_services"
 
 if ((START)); then
-    if compose build --pull --no-cache nginx php-fpm rollup control opencode; then
+    if compose build --pull --no-cache nginx php-fpm rollup control do-md opencode; then
         pass 'All service images build'
     else
         fail 'One or more service images failed to build'
@@ -195,14 +195,14 @@ if ((START)); then
     # The Rollup watcher intentionally writes generated bundles to the bind
     # mount, so lifecycle mode leaves it untouched and validates its image via
     # the build plus the bundles served by Nginx.
-    if compose up -d nginx php-fpm control opencode; then
+    if compose up -d nginx php-fpm control do-md opencode; then
         pass 'Application services started'
     else
         fail 'Application services failed to start'
     fi
 fi
 
-for service in nginx php-fpm control opencode; do
+for service in nginx php-fpm control do-md opencode; do
     if container_running "$service"; then
         pass "$service is running"
     else
@@ -220,6 +220,7 @@ NGINX_RESTARTS="$(restart_count nginx 2>/dev/null || printf '')"
 PHP_RESTARTS="$(restart_count php-fpm 2>/dev/null || printf '')"
 OPENCODE_RESTARTS="$(restart_count opencode 2>/dev/null || printf '')"
 CONTROL_RESTARTS="$(restart_count control 2>/dev/null || printf '')"
+DO_MD_RESTARTS="$(restart_count do-md 2>/dev/null || printf '')"
 
 published="$(compose port nginx 80 2>/dev/null || true)"
 if [[ "$published" =~ ^\[(.*)\]:([0-9]+)$ ]]; then
@@ -359,6 +360,31 @@ grep -Fq '/var/run/docker.sock' <<<"$control_mounts" && pass 'Control receives t
 control_env="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$control_id" 2>/dev/null || true)"
 if ! grep -Fq '/run/secrets/nestbox-host-token' <<<"$control_mounts" && ! grep -Eq '^NESTBOX_HOST_TOKEN' <<<"$control_env"; then pass 'Control has no host token mount or environment'; else fail 'Control still has host token configuration'; fi
 
+do_md_id="$(container_id do-md)"
+do_md_binding="$(docker inspect --format '{{json (index .NetworkSettings.Ports "8080/tcp")}}' "$do_md_id" 2>/dev/null || true)"
+[[ -z "$do_md_binding" || "$do_md_binding" == "null" ]] && pass 'do-md API is not published on the host' || fail 'do-md API is published on the host'
+do_md_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$do_md_id" 2>/dev/null || true)"
+grep -Fq '/var/run/docker.sock' <<<"$do_md_mounts" && fail 'do-md receives the Docker socket' || pass 'do-md does not receive the Docker socket'
+for target in /documents/workspace /documents/pages; do
+    expected_source="$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$target\"}}{{.Source}}{{end}}{{end}}" "$do_md_id" 2>/dev/null || true)"
+    for service in php-fpm opencode; do
+        actual_source="$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$target\"}}{{.Source}}{{end}}{{end}}" "$(container_id "$service")" 2>/dev/null || true)"
+        [[ -n "$expected_source" && "$actual_source" == "$expected_source" ]] && pass "$service and do-md share $target" || fail "$service and do-md have different $target mounts"
+    done
+done
+compose exec -T do-md node /opt/do-md/check.mjs --health >/dev/null 2>&1 && pass 'do-md exposes the compatible internal API' || fail 'do-md API is unavailable or incompatible'
+compose exec -T php-fpm php -l /home/code/__includes/functions.php >/dev/null 2>&1 && pass 'Shared PHP helpers pass lint' || fail 'Shared PHP helpers failed lint'
+if compose exec -T php-fpm php < "$ROOT/tests/do-md-smoke.php"; then
+    pass 'PHP do-md helpers read and mutate both shared document trees'
+else
+    fail 'PHP do-md shared-filesystem integration failed'
+fi
+if compose exec -T opencode node /opt/do-md/check.mjs --mcp; then
+    pass 'OpenCode do-md MCP dispatches remotely against both shared trees'
+else
+    fail 'OpenCode do-md remote MCP failed'
+fi
+
 if ((INDEX_PRESENT)); then
     if compose exec -T php-fpm php -l /home/code/index.php >/dev/null 2>&1; then
         pass 'Installed super-document passes PHP lint'
@@ -443,7 +469,7 @@ else
     fail 'EventSource did not receive the expected Nchan event'
 fi
 
-for entry in "nginx:$NGINX_RESTARTS" "php-fpm:$PHP_RESTARTS" "control:$CONTROL_RESTARTS" "opencode:$OPENCODE_RESTARTS"; do
+for entry in "nginx:$NGINX_RESTARTS" "php-fpm:$PHP_RESTARTS" "control:$CONTROL_RESTARTS" "do-md:$DO_MD_RESTARTS" "opencode:$OPENCODE_RESTARTS"; do
     service="${entry%%:*}"
     before="${entry#*:}"
     after="$(restart_count "$service" 2>/dev/null || printf '')"

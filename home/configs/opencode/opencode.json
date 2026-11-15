@@ -6,6 +6,11 @@
   },
   "instructions": ["/etc/opencode/instructions.md", "/etc/opencode/instance.md"],
   "mcp": {
+    "do-md": {
+      "type": "local",
+      "command": ["do-md-mcp", "--url", "{env:NESTBOX_DO_MD_URL}", "--root", "/documents", "--timeout-ms", "{env:NESTBOX_DO_MD_TIMEOUT_MS}"],
+      "enabled": true
+    },
     "control": {
       "type": "local",
       "command": ["node", "/etc/opencode/control-mcp.js"],
@@ -20,6 +25,7 @@
     "external_directory": {
       "*": "ask",
       "/nestbox/**": "allow",
+      "/documents/**": "allow",
       "/workspace/**": "allow"
     }
   }
