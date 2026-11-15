@@ -38,6 +38,8 @@ services:
   # page state and intentionally operate on the mounted workspace.
   php-fpm:
     depends_on:
+      do-md:
+        condition: service_healthy
       control:
         condition: service_healthy
     build:
@@ -68,6 +70,8 @@ services:
       - OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
       - NESTBOX_CONTROL_URL=http://control:4088
+      - NESTBOX_DO_MD_URL=http://do-md:8080
+      - NESTBOX_DO_MD_TIMEOUT_MS=${NESTBOX_DO_MD_TIMEOUT_MS:-20000}
     labels:
       - nestbox.exec.allow-target=true
       - nestbox.exec.allow-source=true
@@ -100,6 +104,37 @@ services:
       - nestbox.exec.allow-target=true
     restart: unless-stopped
 
+  # Shared Markdown execution backend. No host port, Docker socket, or secrets
+  # environment; it uses the same /workspace mount as PHP and OpenCode.
+  do-md:
+    build:
+      context: .
+      dockerfile: ./docker/do-md/Dockerfile
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    working_dir: /workspace
+    command: ["serve", "--root", "/workspace", "--host", "0.0.0.0", "--port", "8080", "--timeout-ms", "${NESTBOX_DO_MD_TIMEOUT_MS:-20000}"]
+    expose:
+      - "8080"
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_PATH:-.}
+        target: /workspace
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(async r => { const h = await r.json(); if (!r.ok || !h.ok || h.apiVersion !== 1) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    stop_grace_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
   # Private, label-gated API for container exec.
   # This is the only Nestbox service with access to the host Docker socket.
   control:
@@ -127,6 +162,8 @@ services:
   # deliberately receives no Docker socket or direct host control.
   opencode:
     depends_on:
+      do-md:
+        condition: service_healthy
       control:
         condition: service_healthy
     build:
@@ -167,6 +204,8 @@ services:
     environment:
       - NESTBOX_BUS_PUBLISH_URL=http://nginx:8080/_nestbox/publish
       - NESTBOX_CONTROL_URL=http://control:4088
+      - NESTBOX_DO_MD_URL=http://do-md:8080
+      - NESTBOX_DO_MD_TIMEOUT_MS=${NESTBOX_DO_MD_TIMEOUT_MS:-20000}
     labels:
       - nestbox.exec.allow-source=true
       - nestbox.exec.targets=php-fpm,rollup

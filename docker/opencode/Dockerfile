@@ -14,10 +14,14 @@ ARG APP_GID=1000
 # instead of retaining an older branch as the rolling base image advances.
 RUN php_package="$(apk search --no-cache --quiet --exact 'php[0-9]*' | grep -E '^php[0-9]+$' | sort -V | tail -n 1)" && \
     test -n "$php_package" && \
-    apk add --no-cache git nodejs "$php_package" "$php_package-dom" "$php_package-mbstring" "$php_package-openssl" "$php_package-phar" "$php_package-tokenizer" "$php_package-xml" "$php_package-xmlwriter" su-exec && \
+    apk add --no-cache git nodejs npm "$php_package" "$php_package-dom" "$php_package-mbstring" "$php_package-openssl" "$php_package-phar" "$php_package-tokenizer" "$php_package-xml" "$php_package-xmlwriter" su-exec && \
     ln -s "/usr/bin/$php_package" /usr/local/bin/php && \
     addgroup -g "${APP_GID}" -S nestbox && \
     adduser -u "${APP_UID}" -G nestbox -S -h /home/nestbox nestbox
+
+RUN npm install --prefix /opt/do-md --engine-strict --omit=dev --no-audit --no-fund @p10i/do-md@latest && \
+    ln -s /opt/do-md/node_modules/.bin/do-md /usr/local/bin/do-md && \
+    ln -s /opt/do-md/node_modules/.bin/do-md-mcp /usr/local/bin/do-md-mcp
 
 ENV OPENCODE_CONFIG=/etc/opencode/opencode.json
 ENV HOME=/home/nestbox

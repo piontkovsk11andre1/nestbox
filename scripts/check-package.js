@@ -11,6 +11,7 @@ const requiredPaths = [
   'docker/rollup/Dockerfile',
   'docker/control/Dockerfile',
   'docker/control/server.py',
+  'docker/do-md/Dockerfile',
   'CHANGELOG.md',
   'home/configs/opencode/control-mcp.js',
   'home/configs/opencode/instance.example.md',

@@ -95,6 +95,8 @@ Copy `.env.example` to `.env` and `home/configs/opencode/instance.example.md` to
 
 Relative bind paths resolve from the installation directory. The page tree is mounted as `/home/code` in runtime services and as the writable `/nestbox/home/code` agent path. `WORKSPACE_PATH` is mounted as `/workspace` in PHP and OpenCode. `NESTBOX_PAGE_PATH` remains an optional advanced override for a user-requested external page tree.
 
+The default `do-md` service mounts the same `WORKSPACE_PATH` at `/workspace`, just like PHP and OpenCode. Its server root, the MCP root, and PHP helper defaults are `/workspace`. Default page files can be processed at `/workspace/home/code` for a direct install or `/workspace/.nestbox/home/code` for the nested layout. An external `NESTBOX_PAGE_PATH` outside the workspace is not implicitly exposed to do-md. The API stays on the private Compose network at `http://do-md:8080`; never publish its port by default.
+
 The runtime does not require a workspace `package.json`. Project manifests are accessed through the ordinary workspace mounts in PHP-FPM and OpenCode. The control service mounts only the Docker socket and provides label-gated container execution.
 
 Update the new `home/configs/opencode/instance.md` with:
@@ -127,7 +129,11 @@ Before startup, query existing Docker containers with the proposed Compose proje
 
 For additional directories, mount the same host path at the same container path in PHP and OpenCode. Extend OpenCode's `external_directory` permission when unattended access is intended. Prefer read-only mounts unless writing is required.
 
+If an additional directory, including an external page tree, must be processed by do-md, explicitly mount it at the same agreed `/workspace/<path>` in PHP, OpenCode, and do-md. Keep the do-md service on its private Compose network rather than a shared public network. The service user is `${APP_UID}:${APP_GID}` and must be able to write the selected workspace. No new data volume or backup target is created; continue backing up the existing workspace and page tree.
+
 Nestbox defaults to rolling latest-stable image tags and the latest system packages available in their configured repositories. OpenCode selects the newest PHP branch available from Alpine; PHP-FPM follows the official rolling PHP image. Verify both runtime versions after each build because Alpine packaging can lag upstream PHP. Resolve any incompatible branch mismatch before handoff. Use `docker compose build --pull --no-cache` to refresh base images and cached package-install layers. Application library lockfiles remain authoritative and are updated separately.
+
+The do-md service and OpenCode proxy install `@p10i/do-md@latest` at build time, using version 1.4.0+ with HTTP API v1. The service health check uses `/healthz`; the remote MCP checks capabilities when connecting. `NESTBOX_DO_MD_TIMEOUT_MS` defaults to `20000` in all callers and the service; PHP and remote MCP add five seconds of transport grace. `NESTBOX_DO_MD_URL=http://do-md:8080` is supplied by Compose to PHP and OpenCode. Preserve the enabled default MCP configuration when merging installation-specific agents or tools.
 
 For a path-prefixed reverse proxy, the outer proxy removes the prefix before forwarding and configures `NESTBOX_URL_PREFIX`. Set `NESTBOX_OPENCODE_PUBLIC_URL` explicitly whenever the public OpenCode scheme or host differs from direct Nestbox access.
 
@@ -157,6 +163,8 @@ Verify:
 - `/Agent` redirects to OpenCode on the same published port;
 - the actual OpenCode URL works in the user's client;
 - `control` is healthy and its API is not published on the host;
+- `do-md` is healthy, its port is not published, and `/workspace` refers to the same host source in PHP, OpenCode, and do-md;
+- PHP reaches the internal do-md API and OpenCode connects its remote-dispatch do-md MCP with `/workspace` as its root;
 - a provider and model are available for agent work, without printing credentials or sending a billable prompt unless the user approves it;
 - `/_nestbox/health` returns HTTP 200;
 - a transient PHP event reaches an EventSource subscriber through Nchan;
@@ -176,6 +184,8 @@ bash tests/nestbox.sh
 ```
 
 The scripts support both the fresh 404-first tree and later installations with `index.php`. `--start` for Bash and `-Start` for PowerShell may build and start application services first. Lifecycle mode never runs `down`, removes volumes, or starts an absent Rollup watcher that could rewrite bundles.
+
+The host smoke suite checks the workspace mount and PHP-to-do-md health inside containers; it does not require host Node.js, PHP, or an npm runner and does not create document fixtures.
 
 Some clients resolve `.localhost` internally even when an operating-system DNS query does not. Test the actual OpenCode URL. If it fails to resolve, ask before adding this hosts-file entry:
 
@@ -276,9 +286,29 @@ Host npm execution and npm script confirmation tools have been removed. Containe
 
 ```sh
 docker compose config --quiet
-docker compose build --pull --no-cache control opencode
-docker compose up -d control php-fpm opencode
+docker compose build --pull --no-cache control do-md opencode
+docker compose up -d control do-md php-fpm opencode
+docker compose restart nginx
 bash tests/nestbox.sh
 ```
 
 On Windows, run `.\tests\nestbox.ps1` instead of the Bash test. Reconnect to OpenCode after recreation so it loads the updated MCP tools and instructions. Inspect `docker compose ps` and `docker compose logs control` to confirm health. Project workloads formerly executed on the host must use an appropriate project container or be run manually by the host maintainer.
+
+## Upgrading To The Default do-md Service (0.7.0)
+
+1. Apply the source changes while preserving `.env`, pages, `instance.md`, custom agent configuration, and installation-specific overrides.
+2. Merge the `do-md` service with the same `/workspace` bind used by PHP and OpenCode, the caller URL/timeout environment, and healthy dependencies into Compose. Remove any old `/documents` alias mounts. Preserve custom service networks; the do-md backend should remain internal to this installation.
+3. Merge the enabled remote-dispatch `do-md` MCP entry using `--root /workspace`. Replace an older local-only do-md entry rather than registering a duplicate under another name. The existing `/workspace/**` permission is sufficient.
+4. Add `NESTBOX_DO_MD_TIMEOUT_MS=20000` to `.env` if an explicit value is desired; the Compose default also works with an existing file. Keep the same setting for PHP, MCP, and the service.
+5. From the installation directory, run:
+
+```sh
+docker compose config --quiet
+docker compose build --pull --no-cache do-md control opencode
+docker compose up -d do-md control php-fpm opencode
+docker compose restart nginx
+docker compose ps
+bash tests/nestbox.sh
+```
+
+Use `.\tests\nestbox.ps1` on Windows. PHP-FPM must be recreated for its new mounts/environment. Restart Nginx afterward to refresh any cached upstream address. Reconnect to OpenCode after recreation. Check `docker compose logs do-md` for service failures. No public route, host npm script, or additional published port is required.

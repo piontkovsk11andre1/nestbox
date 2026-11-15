@@ -128,7 +128,7 @@ try {
 
     $result = Invoke-Compose @('config', '--services') -Quiet
     $services = @($result.Output | ForEach-Object { $_.ToString().Trim() })
-    foreach ($service in @('nginx', 'php-fpm', 'rollup', 'control', 'opencode')) {
+    foreach ($service in @('nginx', 'php-fpm', 'rollup', 'control', 'do-md', 'opencode')) {
         if ($services -contains $service) { Pass "Compose defines $service" } else { Fail "Compose does not define $service" }
     }
     $result = Invoke-Compose @('ps', '--services') -Quiet
@@ -137,16 +137,16 @@ try {
     }
 
     if ($Start) {
-        $result = Invoke-Compose @('build', '--pull', '--no-cache', 'nginx', 'php-fpm', 'rollup', 'control', 'opencode')
+        $result = Invoke-Compose @('build', '--pull', '--no-cache', 'nginx', 'php-fpm', 'rollup', 'control', 'do-md', 'opencode')
         if ($result.Code -eq 0) { Pass 'All service images build' } else { Fail 'One or more service images failed to build' }
 
         # Do not start the bind-mounted Rollup watcher: it intentionally writes
         # generated bundles. Its image and output are validated separately.
-        $result = Invoke-Compose @('up', '-d', 'nginx', 'php-fpm', 'control', 'opencode')
+        $result = Invoke-Compose @('up', '-d', 'nginx', 'php-fpm', 'control', 'do-md', 'opencode')
         if ($result.Code -eq 0) { Pass 'Application services started' } else { Fail 'Application services failed to start' }
     }
 
-    foreach ($service in @('nginx', 'php-fpm', 'control', 'opencode')) {
+    foreach ($service in @('nginx', 'php-fpm', 'control', 'do-md', 'opencode')) {
         if (Test-ContainerRunning $service) { Pass "$service is running" } else { Fail "$service is not running" }
     }
     $rollupId = Get-ContainerId 'rollup'
@@ -157,7 +157,7 @@ try {
     }
 
     $restartCounts = @{}
-    foreach ($service in @('nginx', 'php-fpm', 'control', 'opencode')) { $restartCounts[$service] = Get-RestartCount $service }
+    foreach ($service in @('nginx', 'php-fpm', 'control', 'do-md', 'opencode')) { $restartCounts[$service] = Get-RestartCount $service }
 
     $result = Invoke-Compose @('port', 'nginx', '80') -Quiet
     $published = ($result.Output -join "`n").Trim()
@@ -258,6 +258,24 @@ try {
     if (@($controlInspect.Mounts.Destination) -contains '/var/run/docker.sock') { Pass 'Control receives the Docker socket' } else { Fail 'Control does not receive the Docker socket' }
     if (@($controlInspect.Mounts.Destination) -notcontains '/run/secrets/nestbox-host-token' -and @($controlInspect.Config.Env) -notmatch '^NESTBOX_HOST_TOKEN') { Pass 'Control has no host token mount or environment' } else { Fail 'Control still has host token configuration' }
 
+    $doMdId = Get-ContainerId 'do-md'
+    $doMdInspect = @(& docker inspect $doMdId 2>$null | ConvertFrom-Json)[0]
+    if ($null -eq $doMdInspect.NetworkSettings.Ports.'8080/tcp') { Pass 'do-md API is not published on the host' } else { Fail 'do-md API is published on the host' }
+    if (@($doMdInspect.Mounts.Destination) -notcontains '/var/run/docker.sock') { Pass 'do-md does not receive the Docker socket' } else { Fail 'do-md receives the Docker socket' }
+    foreach ($target in @('/workspace')) {
+        $expectedSource = @($doMdInspect.Mounts | Where-Object { $_.Destination -eq $target } | ForEach-Object { $_.Source })
+        foreach ($service in @('php-fpm', 'opencode')) {
+            $inspect = if ($service -eq 'opencode') { $openCodeInspect } else { @(& docker inspect (Get-ContainerId $service) 2>$null | ConvertFrom-Json)[0] }
+            $actualSource = @($inspect.Mounts | Where-Object { $_.Destination -eq $target } | ForEach-Object { $_.Source })
+            if ($expectedSource.Count -eq 1 -and $actualSource.Count -eq 1 -and $expectedSource[0] -eq $actualSource[0]) { Pass "$service and do-md share $target" } else { Fail "$service and do-md have different $target mounts" }
+        }
+    }
+    $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-l', '/home/code/__includes/functions.php') -Quiet
+    if ($result.Code -eq 0) { Pass 'Shared PHP helpers pass lint' } else { Fail 'Shared PHP helpers failed lint' }
+    $doMdHealthCode = "require '/home/code/__includes/functions.php'; `$health = nestbox_do_md_health(); exit(`$health['ok'] ? 0 : 1);"
+    $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-r', $doMdHealthCode) -Quiet
+    if ($result.Code -eq 0) { Pass 'PHP reaches the internal do-md API' } else { Fail 'PHP cannot reach the internal do-md API' }
+
     if ($indexPresent) {
         $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-l', '/home/code/index.php') -Quiet
         if ($result.Code -eq 0) { Pass 'Installed super-document passes PHP lint' } else { Fail 'Installed super-document failed PHP lint' }
@@ -315,7 +333,7 @@ try {
     Remove-Job -Job $SseJob -Force -ErrorAction SilentlyContinue
     $SseJob = $null
 
-    foreach ($service in @('nginx', 'php-fpm', 'control', 'opencode')) {
+    foreach ($service in @('nginx', 'php-fpm', 'control', 'do-md', 'opencode')) {
         $after = Get-RestartCount $service
         if ((Test-ContainerRunning $service) -and $null -ne $restartCounts[$service] -and $restartCounts[$service] -eq $after) { Pass "$service remained stable during the test" } else { Fail "$service restarted or stopped during the test" }
     }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- Include do-md as a default internal service and configure OpenCode's do-md MCP for remote HTTP execution.
+- Use the same `/workspace` mount in PHP, OpenCode, and do-md; default MCP and PHP document paths require no translation.
+- Install `@p10i/do-md@latest` in the backend and proxy images, with matched runtime ownership, API health dependencies, and no additional published port.
+- Add bounded, non-retrying PHP HTTP helpers for all eight document/reference operations, health, and capabilities.
+- Check the shared workspace mount and PHP-to-do-md health in both host smoke suites; document activation and the default 20-second deadline.
+
 ## 0.6.0
 
 - Consistently track latest-stable runtime images, dynamically select Alpine's newest PHP CLI branch, and document fresh builds with `--pull --no-cache`.
