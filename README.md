@@ -8,13 +8,29 @@ Its core design is the **super-document**: one cohesive PHP and Markdown documen
 
 Nestbox runs with Docker Compose using Nginx, PHP-FPM, Rollup, OpenCode, and a private control service. A fresh installation opens with a prompt for creating its first screen instead of shipping a predefined application.
 
-## Container And Host Control
+## Container Control
 
 The `control` service is the only container with `/var/run/docker.sock`. Its internal-only API permits exec only when caller, target, project, and root-user labels allow it. OpenCode reaches the API through the bundled control MCP and can target PHP-FPM and Rollup by default. Trusted PHP pages can use `nestbox_control_exec()` and are restricted to PHP-FPM self-exec.
 
-Native host commands are limited to scripts already declared in the workspace `package.json`. Keep `npm run host --` running from the workspace when host scripts are needed. The native runner maintains a `docker compose exec -T control` stdio bridge; its image-resident helper talks only to the control server on container loopback. No host API, runner token, second published port, or shared filesystem queue is used. MCP can request script additions, edits, or deletions, but the host runner applies them only after the user supplies a short-lived code displayed exclusively in the host terminal.
+Project commands run inside the appropriate container through `docker_exec`. Host-side Docker Compose activation is performed by the user or external maintainer. Nestbox needs no background process on the host and no workspace `package.json`.
 
-Control emits bounded structured events to ordinary container logs. Use `docker compose logs control`; no telemetry collector, database, or observability dependency is installed. Docker socket access is root-equivalent on the host, and host scripts execute in the trusted writable workspace, so neither mechanism is a sandbox.
+Control emits bounded structured events to ordinary container logs. Use `docker compose logs control`; no telemetry collector, database, or observability dependency is installed. Docker socket access is root-equivalent on the host, so this is a controlled capability, not a sandbox.
+
+## Runtime Versions And Updates
+
+Nestbox tracks the latest stable container images by default: OpenCode and Composer use `latest`, Alpine uses `latest`, and Node, Python, and PHP use their rolling Alpine variants. Alpine-installed tools use the newest packages available in the base image's configured repositories; OpenCode's PHP CLI selects the newest available PHP branch. These repositories can lag upstream releases, so verify the resulting PHP CLI and FPM versions after a refresh.
+
+Refresh images and installed system packages from the installation directory:
+
+```sh
+docker compose config --quiet
+docker compose build --pull --no-cache
+docker compose up -d
+docker compose exec -T php-fpm php --version
+docker compose exec -T opencode php --version
+```
+
+Reconnect to OpenCode after recreation, then run `bash tests/nestbox.sh` or `.\tests\nestbox.ps1`. Existing containers do not update automatically. JavaScript and PHP library dependencies continue to use their committed lockfiles; runtime refreshes do not rewrite those dependencies.
 
 ## Learn More
 
@@ -32,7 +48,9 @@ Create a new Nestbox project with npm:
 npm create @p10i/nestbox@latest
 ```
 
-The creator previews the exact paths before it writes files. The recommended layout installs Nestbox at `<workspace>/.nestbox` so Nestbox stays separate from your project files. You can also choose a direct install into an empty directory. It creates a minimal workspace `package.json` when absent or safely merges non-conflicting `host` and `test:host` scripts into an existing manifest. After creation, edit `.env`, start `npm run host --`, then run the Docker Compose validation and startup commands printed by the creator.
+The creator previews the exact paths before it writes files. The recommended layout installs Nestbox at `<workspace>/.nestbox` so Nestbox stays separate from your project files. You can also choose a direct install into an empty directory. The workspace's package manifest is left untouched. After creation, edit `.env`, then run the Docker Compose validation and startup commands printed by the creator. Node.js and npm are needed only to use the creator; the installed runtime runs entirely in Docker.
+
+For upgrades from versions with host npm execution, see the migration notes in [INSTALL.md](INSTALL.md#upgrading-from-host-runner-versions).
 
 For agent-guided installation or repair work, copy and send this to an agent with filesystem, Git, Docker, and terminal access:
 

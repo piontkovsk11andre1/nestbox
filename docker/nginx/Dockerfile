@@ -13,7 +13,7 @@ COPY ./home/code /home/code
 RUN npx rollup -c
 
 # ---- Stage 2: runtime ----
-FROM alpine:3.23
+FROM alpine:latest
 
 RUN apk add --no-cache nginx nginx-mod-http-nchan && \
     mkdir -p /run/nginx /var/lib/nginx/tmp

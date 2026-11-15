@@ -159,9 +159,9 @@ grep -Fq 'deliberately has no Docker socket' "$ROOT/home/configs/opencode/instru
 [[ -f "$ROOT/home/configs/opencode/instance.md" ]] && pass 'Installed OpenCode instance policy exists' || fail 'Copy instance.example.md to instance.md before startup'
 grep -Fq 'Commit policy:' "$ROOT/home/configs/opencode/instance.md" && pass 'OpenCode instance policy records commit behavior' || fail 'OpenCode instance policy omits commit behavior'
 grep -Fq 'Communication language:' "$ROOT/home/configs/opencode/instance.md" && pass 'OpenCode instance policy records communication language' || fail 'OpenCode instance policy omits communication language'
-grep -Fq '"instance.md"' "$ROOT/home/configs/opencode/opencode.json" && pass 'OpenCode loads instance policy directly' || fail 'OpenCode does not load instance policy'
+grep -Fq '"/etc/opencode/instance.md"' "$ROOT/home/configs/opencode/opencode.json" && pass 'OpenCode loads instance policy directly' || fail 'OpenCode does not load instance policy'
 grep -Fq '"control"' "$ROOT/home/configs/opencode/opencode.json" && pass 'OpenCode registers the control MCP' || fail 'OpenCode does not register the control MCP'
-[[ -f "$ROOT/docker/control/server.py" && -f "$ROOT/docker/control/host_bridge.py" && -f "$ROOT/host-runner.mjs" ]] && pass 'Control and host runner sources exist' || fail 'Control or host runner source is missing'
+[[ -f "$ROOT/docker/control/server.py" && -f "$ROOT/home/configs/opencode/control-mcp.js" ]] && pass 'Container control sources exist' || fail 'Container control source is missing'
 
 if compose config --quiet; then
     pass 'Compose configuration is valid'
@@ -186,7 +186,7 @@ while IFS= read -r service; do
 done <<<"$running_services"
 
 if ((START)); then
-    if compose build nginx php-fpm rollup control opencode; then
+    if compose build --pull --no-cache nginx php-fpm rollup control opencode; then
         pass 'All service images build'
     else
         fail 'One or more service images failed to build'

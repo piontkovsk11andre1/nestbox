@@ -12,14 +12,13 @@ npm create @p10i/nestbox@latest
 
 The published npm package is `@p10i/create-nestbox`; npm maps `npm create @p10i/nestbox` to that package. The creator explains and previews one of the two default layouts before writing files. The recommended layout installs at `<workspace>/.nestbox` so Nestbox stays separate from project files. The direct layout writes Nestbox files into an empty selected directory. The creator copies `.env.example` to `.env`, copies `home/configs/opencode/instance.example.md` to `instance.md`, records npm package provenance in the instance policy, and initializes fresh installation Git history when Git is available.
 
-The creator does not start Docker, start the host bridge, or collect secrets. Node.js and npm are required for the bridge. After it finishes, edit `.env`, then run from the installation directory:
+The creator does not start Docker or collect secrets. Node.js and npm are needed only to run the creator, not the installed runtime. After it finishes, edit `.env`, then run from the installation directory:
 
 ```sh
 docker compose config --quiet
-docker compose up -d --build
+docker compose build --pull --no-cache
+docker compose up -d
 ```
-
-After `control` is healthy, run `npm run host --` from the workspace in a separate terminal.
 
 Then run the host test suite documented in section 7.
 
@@ -56,7 +55,7 @@ docker version
 docker compose version
 ```
 
-Nestbox requires Git, Node.js with npm, a running Docker Engine, and Docker Compose v2. If something is missing, explain the platform-specific requirement and pause. Do not install system software without approval.
+Nestbox requires Git, a running Docker Engine, and Docker Compose v2. The npm creator additionally requires Node.js with npm; installation from Git does not. If something is missing, explain the platform-specific requirement and pause. Do not install system software without approval.
 
 Inspect Git status for the selected directory and installation target before changing files. Preserve unrelated changes. The fresh Nestbox repository remains independent in both default layouts, including when `.nestbox` is nested inside another Git workspace.
 
@@ -96,14 +95,7 @@ Copy `.env.example` to `.env` and `home/configs/opencode/instance.example.md` to
 
 Relative bind paths resolve from the installation directory. The page tree is mounted as `/home/code` in runtime services and as the writable `/nestbox/home/code` agent path. `WORKSPACE_PATH` is mounted as `/workspace` in PHP and OpenCode. `NESTBOX_PAGE_PATH` remains an optional advanced override for a user-requested external page tree.
 
-Configure the host bridge in the workspace root before Compose starts:
-
-- For `.nestbox` layout, create `package.json` from `.nestbox/package.host.json` when absent, or merge only its `host` and `test:host` scripts into the existing manifest.
-- For direct layout, use `node host-runner.mjs` and `node tests/host-runner.mjs` for those scripts. A source clone's publisher-oriented `package.json` may be replaced by this installation manifest after preserving any intentional project metadata.
-- Never overwrite a conflicting script. Stop and ask for a different script name.
-- Start `npm run host --` after `control` is healthy. The runner opens a persistent `docker compose exec -T control` stdio bridge from the installation directory. The image-resident helper sends heartbeats and job results through the server's container-loopback API without a host listener, token, published port, or shared queue files.
-- If the runner reports a stale control image, rebuild and recreate `control` with `docker compose build control` and `docker compose up -d control`.
-- The workspace manifest is mounted read-only in runtime containers. Confirmed changes are written only by the native host runner.
+The runtime does not require a workspace `package.json`. Project manifests are accessed through the ordinary workspace mounts in PHP-FPM and OpenCode. The control service mounts only the Docker socket and provides label-gated container execution.
 
 Update the new `home/configs/opencode/instance.md` with:
 
@@ -126,7 +118,7 @@ Then ask about:
 - Linux UID and GID when bind-mount ownership matters;
 - additional directories required by PHP and OpenCode;
 - an optional reverse-proxy URL prefix;
-- rolling or pinned container images;
+- the default latest-stable image policy, with pinning only as an explicitly requested adaptation;
 - `NESTBOX_OPENCODE_PUBLIC_URL` when `agent.<nestbox-host>` cannot be derived.
 
 Open `.env` in a local editor for runtime settings and secrets. Never ask the user to paste provider keys into chat or print the completed file.
@@ -135,7 +127,9 @@ Before startup, query existing Docker containers with the proposed Compose proje
 
 For additional directories, mount the same host path at the same container path in PHP and OpenCode. Extend OpenCode's `external_directory` permission when unattended access is intended. Prefer read-only mounts unless writing is required.
 
-Keep PHP-FPM and OpenCode's PHP CLI on the same PHP version. For a path-prefixed reverse proxy, the outer proxy removes the prefix before forwarding and configures `NESTBOX_URL_PREFIX`. Set `NESTBOX_OPENCODE_PUBLIC_URL` explicitly whenever the public OpenCode scheme or host differs from direct Nestbox access.
+Nestbox defaults to rolling latest-stable image tags and the latest system packages available in their configured repositories. OpenCode selects the newest PHP branch available from Alpine; PHP-FPM follows the official rolling PHP image. Verify both runtime versions after each build because Alpine packaging can lag upstream PHP. Resolve any incompatible branch mismatch before handoff. Use `docker compose build --pull --no-cache` to refresh base images and cached package-install layers. Application library lockfiles remain authoritative and are updated separately.
+
+For a path-prefixed reverse proxy, the outer proxy removes the prefix before forwarding and configures `NESTBOX_URL_PREFIX`. Set `NESTBOX_OPENCODE_PUBLIC_URL` explicitly whenever the public OpenCode scheme or host differs from direct Nestbox access.
 
 ## 6. Keep The Public Page Tree Empty
 
@@ -149,15 +143,10 @@ Run from the installation directory:
 
 ```sh
 docker compose config --quiet
-docker compose up -d --build
+docker compose build --pull --no-cache
+docker compose up -d
 docker compose ps
 docker compose port nginx 80
-```
-
-In a separate terminal, keep the bridge running from the workspace root:
-
-```sh
-npm run host --
 ```
 
 Verify:
@@ -167,7 +156,7 @@ Verify:
 - `php /sources/php/cli.php __templates/super-document` is rejected;
 - `/Agent` redirects to OpenCode on the same published port;
 - the actual OpenCode URL works in the user's client;
-- `npm run test:host` passes and control health reports the host runner as available;
+- `control` is healthy and its API is not published on the host;
 - a provider and model are available for agent work, without printing credentials or sending a billable prompt unless the user approves it;
 - `/_nestbox/health` returns HTTP 200;
 - a transient PHP event reaches an EventSource subscriber through Nchan;
@@ -245,7 +234,7 @@ Send this work to the internal OpenCode agent. A useful prompt is:
 Extend this Nestbox installation for the following requirement: <request>. Inspect /workspace and /nestbox, follow the internal Nestbox manual, implement and verify all file changes you can, and report the exact host-side activation command for any container or infrastructure change.
 ```
 
-The internal agent edits pages and infrastructure definitions. It has no Docker socket. It may use only the label-gated control MCP for approved container commands and declared host npm scripts; broader activation remains an external-maintainer task.
+The internal agent edits pages and infrastructure definitions. It has no Docker socket. It uses the label-gated control MCP for approved container commands; host-side activation remains an external-maintainer task.
 
 ## 10. Git And Generated State
 
@@ -274,3 +263,22 @@ When a super-document intentionally changes files in `/workspace`, follow that w
 ## 11. Optional Adaptations
 
 Retaining upstream Git history, adding an upstream remote, external page trees, parent-owned engines, submodules, vendoring, shared repositories, alternate Compose layouts, and operating-system shortcuts are optional. Explain their ownership consequences and obtain explicit confirmation before creating them. They must not obscure the two default installation paths.
+
+## Upgrading From Host-Runner Versions
+
+Host npm execution and npm script confirmation tools have been removed. Container execution through `docker_exec` and `nestbox_control_exec()` remains available.
+
+1. Stop the old `npm run host --` terminal or any service configured to launch it.
+2. Apply the source update while preserving installation-specific Compose overrides, `.env`, pages, and `instance.md`. Remove obsolete `host-runner.mjs`, `package.host.json`, `docker/control/host_bridge.py`, and `tests/host-runner.mjs` if the update mechanism leaves deleted files behind.
+3. Remove only the Nestbox-generated `host` and `test:host` scripts from the workspace `package.json`, after checking that they still point to the removed runner and test. Preserve project scripts and metadata. If the manifest was generated solely for the runner, it may be removed after confirming nothing else uses it.
+4. Remove `nestbox.npm.allow`, package.json-specific read-only mounts, and the control service's workspace mount from any local overrides. Keep the ordinary workspace mounts in PHP-FPM and OpenCode. Older installations may also remove obsolete host-token settings and mounts described in the changelog.
+5. From the installation directory, validate and activate the affected services:
+
+```sh
+docker compose config --quiet
+docker compose build --pull --no-cache control opencode
+docker compose up -d control php-fpm opencode
+bash tests/nestbox.sh
+```
+
+On Windows, run `.\tests\nestbox.ps1` instead of the Bash test. Reconnect to OpenCode after recreation so it loads the updated MCP tools and instructions. Inspect `docker compose ps` and `docker compose logs control` to confirm health. Project workloads formerly executed on the host must use an appropriate project container or be run manually by the host maintainer.

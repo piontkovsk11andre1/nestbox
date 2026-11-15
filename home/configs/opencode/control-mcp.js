@@ -5,10 +5,6 @@ const baseUrl = (process.env.NESTBOX_CONTROL_URL || 'http://control:4088').repla
 const timeoutMs = Number(process.env.NESTBOX_CONTROL_TIMEOUT_MS || '30000');
 const tools = [
   { name: 'docker_exec', description: 'Run a command in an allowed Compose service.', inputSchema: { type: 'object', properties: { machine: { type: 'string' }, workdir: { type: 'string' }, command: { type: 'array', items: { type: 'string' } }, user: { type: 'string' }, detach: { type: 'boolean' } }, required: ['machine', 'workdir', 'command'], additionalProperties: false } },
-  { name: 'npm_scripts', description: 'List host npm scripts from /workspace/package.json.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
-  { name: 'npm_run', description: 'Run an allowed npm script through the active host bridge.', inputSchema: { type: 'object', properties: { script: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, detach: { type: 'boolean' } }, required: ['script'], additionalProperties: false } },
-  { name: 'npm_script_change_request', description: 'Request an add, edit, or delete of an npm script. The confirmation code is displayed only by the host runner.', inputSchema: { type: 'object', properties: { operation: { type: 'string', enum: ['add', 'edit', 'delete'] }, name: { type: 'string' }, command: { type: 'string' } }, required: ['operation', 'name'], additionalProperties: false } },
-  { name: 'npm_script_change_confirm', description: 'Confirm a pending npm script change with the host-visible code.', inputSchema: { type: 'object', properties: { requestId: { type: 'string' }, code: { type: 'string' } }, required: ['requestId', 'code'], additionalProperties: false } },
 ];
 
 function request(method, path, body) {
@@ -53,28 +49,12 @@ async function call(name, raw) {
     if (args.detach !== undefined) body.detach = Boolean(args.detach);
     return { machine: args.machine, workdir: args.workdir, command: args.command, result: await request('POST', `/containers/${encodeURIComponent(args.machine)}/exec`, body) };
   }
-  if (name === 'npm_scripts') return request('GET', '/npm/scripts');
-  if (name === 'npm_run') {
-    if (typeof args.script !== 'string' || !args.script) throw new Error('script must be a non-empty string.');
-    if (args.args !== undefined && (!Array.isArray(args.args) || !args.args.every(value => typeof value === 'string'))) throw new Error('args must be a string array.');
-    return request('POST', '/npm/run', { script: args.script, ...(args.args === undefined ? {} : { args: args.args }), ...(args.detach === undefined ? {} : { detach: Boolean(args.detach) }) });
-  }
-  if (name === 'npm_script_change_request') {
-    if (!['add', 'edit', 'delete'].includes(args.operation) || typeof args.name !== 'string' || !args.name) throw new Error('operation and name are required.');
-    if (args.operation !== 'delete' && (typeof args.command !== 'string' || !args.command)) throw new Error('command is required for add and edit.');
-    if (args.operation === 'delete' && args.command !== undefined) throw new Error('command must be omitted for delete.');
-    return request('POST', '/npm/scripts/request', { operation: args.operation, name: args.name, ...(args.command === undefined ? {} : { command: args.command }) });
-  }
-  if (name === 'npm_script_change_confirm') {
-    if (typeof args.requestId !== 'string' || typeof args.code !== 'string') throw new Error('requestId and code are required.');
-    return request('POST', '/npm/scripts/confirm', { requestId: args.requestId, code: args.code });
-  }
   throw new Error(`Unknown tool: ${name}`);
 }
 
 function emit(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
 async function handle(message) {
-  if (message.method === 'initialize') return emit({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'nestbox-control-mcp', version: '0.5.0' } } });
+  if (message.method === 'initialize') return emit({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'nestbox-control-mcp', version: '0.6.0' } } });
   if (message.method === 'initialized') return;
   if (message.method === 'tools/list') return emit({ jsonrpc: '2.0', id: message.id, result: { tools } });
   if (message.method === 'tools/call') {

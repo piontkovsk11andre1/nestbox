@@ -11,9 +11,6 @@ const requiredPaths = [
   'docker/rollup/Dockerfile',
   'docker/control/Dockerfile',
   'docker/control/server.py',
-  'docker/control/host_bridge.py',
-  'host-runner.mjs',
-  'package.host.json',
   'CHANGELOG.md',
   'home/configs/opencode/control-mcp.js',
   'home/configs/opencode/instance.example.md',
@@ -21,7 +18,6 @@ const requiredPaths = [
   'tests/nestbox.sh',
   'tests/nestbox.ps1',
   'tests/control.mjs',
-  'tests/host-runner.mjs',
   'tests/creator.mjs'
 ];
 
@@ -36,10 +32,6 @@ if (packageJson.name !== '@p10i/create-nestbox') {
 
 if (!packageJson.files || packageJson.files.includes('.env')) {
   throw new Error('package.json files must not include .env.');
-}
-
-for (const path of ['host-runner.mjs', 'package.host.json']) {
-  if (!packageJson.files.includes(path)) throw new Error(`package.json files must include ${path}.`);
 }
 
 for (const path of ['!**/node_modules/', '!home/code/scripts-bundle.js', '!home/code/scripts-bundle.css']) {
