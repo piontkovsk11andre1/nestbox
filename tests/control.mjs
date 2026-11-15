@@ -3,9 +3,12 @@ import { resolve } from 'node:path';
 
 const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 const server = resolve('docker/control/server.py');
-const bridge = resolve('docker/control/host_bridge.py');
 const policyTest = String.raw`
 import importlib.util
+import http.client
+import json
+import threading
+from http.server import ThreadingHTTPServer
 spec = importlib.util.spec_from_file_location("control", r"${server}")
 control = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(control)
@@ -26,92 +29,61 @@ target["Labels"]["com.docker.compose.service"] = "rollup"
 assert "not allowed" in control.policy_error(source, target, "1000")
 source["Labels"].pop("nestbox.exec.targets")
 assert "no allowed" in control.policy_error(source, target, "1000")
-broker = control.HostBroker()
-metadata = {"pid": 123, "platform": "test", "hostname": "host"}
-broker.connect("runner-test-1234", "session-test-1234", metadata)
-assert broker.status()["available"]
-job = {"jobId": "job-test", "type": "npm.run"}
-broker.enqueue(job)
-assert broker.next("runner-test-1234", "session-test-1234", 1) == job
-# A new exec session for the same stable runner recovers the assignment and supersedes the old helper.
-broker.connect("runner-test-1234", "session-test-5678", metadata)
-assert broker.next("runner-test-1234", "session-test-5678", 1) == job
+source["Labels"]["nestbox.exec.targets"] = "php-fpm"
+target["Labels"]["com.docker.compose.service"] = "php-fpm"
+target["Labels"].pop("nestbox.exec.allow-root")
+
+# Exercise the public control contract without requiring a real Docker socket.
+calls = []
+def docker_request(method, path, body=None, max_bytes=None):
+    calls.append((method, path, body))
+    if path == "/_ping": return b"OK"
+    if path == "/containers/abc/json": return {"Config": {"User": "1000:1000"}}
+    if path == "/containers/abc/exec": return {"Id": "exec-test"}
+    if path == "/exec/exec-test/start": return (b"hello\n", 6)
+    if path == "/exec/exec-test/json": return {"ExitCode": 0}
+    raise AssertionError(path)
+control.docker_request = docker_request
+control.find_by_ip = lambda ip: source
+control.find_by_name = lambda name: target if name == "php-fpm" else None
+httpd = ThreadingHTTPServer(("127.0.0.1", 0), control.Handler)
+thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+thread.start()
+def request(method, path, body=None):
+    connection = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+    try:
+        connection.request(method, path, json.dumps(body) if body is not None else None)
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
 try:
-    broker.touch("runner-test-1234", "session-test-1234")
-    raise AssertionError("stale session was accepted")
-except PermissionError:
-    pass
-result = {"jobId": "job-test", "exitCode": 0, "stdout": "", "stderr": ""}
-assert broker.complete("runner-test-1234", "session-test-5678", "job-test", result) is False
-assert broker.complete("runner-test-1234", "session-test-5678", "job-test", result) is True
-try:
-    broker.complete("runner-test-1234", "session-test-5678", "job-test", {**result, "stdout": "different"})
-    raise AssertionError("conflicting replay was accepted")
-except RuntimeError:
-    pass
-assert broker.wait("job-test", 1)["exitCode"] == 0
-assert broker.complete("runner-test-1234", "session-test-5678", "job-test", result) is True
-try:
-    broker.complete("runner-test-1234", "session-test-5678", "job-missing", {"jobId": "job-missing", "exitCode": 0, "stdout": "", "stderr": ""})
-    raise AssertionError("missing job result was accepted")
-except FileNotFoundError:
-    pass
-original_ttl = control.HOST_HEARTBEAT_TTL
-control.HOST_HEARTBEAT_TTL = 0
-stale_assigned = control.HostBroker()
-stale_assigned.connect("runner-stale-1234", "session-stale-1234", metadata)
-stale_assigned.enqueue({"jobId": "job-stale-assigned", "type": "npm.run"})
-assert stale_assigned.next("runner-stale-1234", "session-stale-1234", 1)["jobId"] == "job-stale-assigned"
-assert stale_assigned.wait("job-stale-assigned", 1)["interrupted"] is True
-stale_pending = control.HostBroker()
-stale_pending.connect("runner-pending-1234", "session-pending-1234", metadata)
-stale_pending.enqueue({"jobId": "job-stale-pending", "type": "npm.run"})
-assert stale_pending.wait("job-stale-pending", 1)["interrupted"] is True
-control.HOST_HEARTBEAT_TTL = original_ttl
-expired = control.HostBroker()
-expired.connect("runner-expired-1234", "session-expired-1234", metadata)
-expired.enqueue({"jobId": "job-expired", "type": "npm.run"})
-assert expired.next("runner-expired-1234", "session-expired-1234", 1)["jobId"] == "job-expired"
-try:
-    expired.wait("job-expired", 0)
-    raise AssertionError("expired job returned")
-except TimeoutError:
-    pass
-try:
-    expired.complete("runner-expired-1234", "session-expired-1234", "job-expired", {"jobId": "job-expired", "exitCode": 0, "stdout": "", "stderr": ""})
-    raise AssertionError("expired result was accepted")
-except FileNotFoundError:
-    pass
-bridge_spec = importlib.util.spec_from_file_location("host_bridge", r"${bridge}")
-host_bridge = importlib.util.module_from_spec(bridge_spec)
-bridge_spec.loader.exec_module(host_bridge)
-sent = []
-host_bridge.send = sent.append
-host_bridge.request = lambda *args, **kwargs: (409, {"error": "conflicting host result replay"})
-host_bridge.deliver_result("runner-test", "session-test", {"jobId": "job-conflict"})
-assert sent[-1]["type"] == "result.rejected"
-host_bridge.request = lambda *args, **kwargs: (400, {"error": "invalid npm run result"})
-host_bridge.deliver_result("runner-test", "session-test", {"jobId": "job-invalid"})
-assert sent[-1]["type"] == "result.rejected"
-host_bridge.request = lambda *args, **kwargs: (410, {"error": "host job expired"})
-host_bridge.deliver_result("runner-test", "session-test", {"jobId": "job-gone"})
-assert sent[-1]["type"] == "gone"
-host_bridge.request = lambda *args, **kwargs: (409, {"error": "host runner session was superseded"})
-try:
-    host_bridge.deliver_result("runner-test", "session-test", {"jobId": "job-session"})
-    raise AssertionError("superseded session was treated as terminal")
-except RuntimeError:
-    pass
+    status, health = request("GET", "/health")
+    assert status == 200 and health == {"ok": True, "dockerSocketAccess": True}
+    for method, path in [("GET", "/npm/scripts"), ("POST", "/npm/run"), ("POST", "/npm/scripts/request"), ("POST", "/npm/scripts/confirm"), ("POST", "/host/connect"), ("GET", "/host/jobs/next")]:
+        assert request(method, path, {} if method == "POST" else None)[0] == 404
+    body = {"workdir": "/workspace", "command": ["php", "--version"]}
+    status, result = request("POST", "/containers/php-fpm/exec", body)
+    assert status == 200 and result["exitCode"] == 0 and result["output"] == "hello\n"
+    assert result["outputTotalBytes"] == 6 and result["outputTruncated"] is False
+    created = next(call[2] for call in calls if call[1] == "/containers/abc/exec")
+    assert created["Cmd"] == body["command"] and created["WorkingDir"] == "/workspace"
+    calls.clear()
+    assert request("POST", "/containers/php-fpm/exec", {**body, "user": "0"})[0] == 403
+    assert not any(path.endswith("/exec") for _, path, _ in calls)
+    assert request("POST", "/containers/php-fpm/exec", {**body, "command": "php --version"})[0] == 400
+    assert request("POST", "/containers/php-fpm/exec", {**body, "workdir": "relative"})[0] == 400
+finally:
+    httpd.shutdown()
+    httpd.server_close()
+    thread.join()
 `;
 
 let result = spawnSync(python, ['-c', policyTest], {
   encoding: 'utf8',
   env: { ...process.env, COMPOSE_PROJECT_NAME: 'nestbox-test', PYTHONDONTWRITEBYTECODE: '1' },
 });
-if (result.status !== 0) throw new Error(`Control policy test failed: ${result.stderr || result.stdout}`);
-
-result = spawnSync(python, [bridge], { input: '', encoding: 'utf8', timeout: 2000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
-if (result.status !== 0 || result.error?.code === 'ETIMEDOUT') throw new Error(`Host bridge did not close cleanly on stdin EOF: ${result.error?.message || result.stderr}`);
+if (result.status !== 0) throw new Error(`Control policy/API test failed: ${result.error?.message || result.stderr || result.stdout}`);
 
 result = spawnSync(python, [server], { encoding: 'utf8', env: { ...process.env, COMPOSE_PROJECT_NAME: '', PYTHONDONTWRITEBYTECODE: '1' } });
 if (result.status === 0 || !result.stderr.includes('COMPOSE_PROJECT_NAME')) throw new Error('Control did not fail closed without a project name.');
@@ -119,13 +91,13 @@ if (result.status === 0 || !result.stderr.includes('COMPOSE_PROJECT_NAME')) thro
 const messages = [
   { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
   { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+  { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'npm_run', arguments: { script: 'build' } } },
 ].map(value => JSON.stringify(value)).join('\n') + '\n';
 result = spawnSync(process.execPath, [resolve('home/configs/opencode/control-mcp.js')], { input: messages, encoding: 'utf8' });
 if (result.status !== 0) throw new Error(`Control MCP test failed: ${result.stderr}`);
 const responses = result.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
 const names = responses.find(value => value.id === 2)?.result?.tools?.map(tool => tool.name) || [];
-for (const name of ['docker_exec', 'npm_scripts', 'npm_run', 'npm_script_change_request', 'npm_script_change_confirm']) {
-  if (!names.includes(name)) throw new Error(`Control MCP does not expose ${name}.`);
-}
+if (names.length !== 1 || names[0] !== 'docker_exec') throw new Error('Control MCP must expose only docker_exec.');
+if (!responses.find(value => value.id === 3)?.error?.message.includes('Unknown tool')) throw new Error('Control MCP accepted a removed host tool.');
 
 console.log('Control tests passed.');

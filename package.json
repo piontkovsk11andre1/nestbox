@@ -1,6 +1,6 @@
 {
   "name": "@p10i/create-nestbox",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Create Nestbox projects.",
   "license": "MIT",
   "type": "module",
@@ -13,8 +13,6 @@
     "docker/",
     "home/",
     "tests/",
-    "host-runner.mjs",
-    "package.host.json",
     "docker-compose.yaml",
     ".dockerignore",
     ".env.example",
@@ -31,9 +29,7 @@
     "!home/code/scripts-bundle.css"
   ],
   "scripts": {
-    "host": "node host-runner.mjs",
-    "test:host": "node tests/host-runner.mjs",
-    "test": "node tests/control.mjs && node tests/host-runner.mjs && node tests/creator.mjs",
+    "test": "node tests/control.mjs && node tests/creator.mjs",
     "prepack": "node scripts/check-package.js"
   },
   "engines": {

@@ -170,17 +170,15 @@ Use API-created sessions only for explicit page workflows. The shared header's O
 
 ## Container Control API
 
-OpenCode has no Docker socket. Use the control MCP as the only path for commands in other containers or on the native host:
+OpenCode has no Docker socket. Use the control MCP as the only path for commands in other containers:
 
 - `docker_exec` accepts an allowed Compose `machine`, absolute `workdir`, positional `command` array, and optional `user` or `detach` value.
-- `npm_scripts` lists scripts from `/workspace/package.json`.
-- `npm_run` executes one declared script through the active native host runner. Prefer `detach: true` for work expected to exceed the MCP request timeout.
-- `npm_script_change_request` requests an add, edit, or delete. The confirmation code appears only in the host runner terminal.
-- `npm_script_change_confirm` applies the pending change after the user explicitly supplies that code.
 
-Do not call the control HTTP API directly from OpenCode, impersonate the native runner, invoke Docker or SSH as a substitute, or work around a missing MCP capability. PHP cannot invoke MCP, so trusted super-documents may use `nestbox_control_exec()`; default labels restrict PHP-FPM to self-exec. Only OpenCode has `nestbox.npm.allow=true` by default. Root exec requires an explicit target label.
+Run project commands, including npm scripts, in the appropriate container. Use `detach: true` for commands expected to exceed the MCP request timeout. Native host execution is not provided; hand host-side activation to the user or external maintainer.
 
-The control log is the audit source of truth and requires no observability service. The native runner uses an authenticated, loopback-only long-poll endpoint; no host listener or filesystem queue exists. Commands still operate in trusted containers and a trusted writable workspace; Docker socket access and editable host-script source mean this is a controlled capability, not a security sandbox.
+Do not call the control HTTP API directly from OpenCode, invoke Docker or SSH as a substitute, or work around a missing MCP capability. PHP cannot invoke MCP, so trusted super-documents may use `nestbox_control_exec()`; default labels restrict PHP-FPM to self-exec. Root exec requires an explicit target label.
+
+The control log is the audit source of truth and requires no observability service. Commands operate in trusted containers and a trusted writable workspace; Docker socket access means this is a controlled capability, not a security sandbox.
 
 ## Git And Commit Policy
 
@@ -202,9 +200,9 @@ The default Compose application has five services:
 - `php-fpm`: executes HTTP and CLI directions. It mounts the page tree and workspace writable because trusted pages may intentionally modify them.
 - `rollup`: watches `scripts.js` and browser dependencies and writes local JS/CSS bundles into the page tree.
 - `opencode`: runs this agent, mounts the engine and workspace, and edits the page tree through `/nestbox/home/code`.
-- `control`: owns the Docker socket and privately brokers label-gated container exec and host-runner jobs.
+- `control`: owns the Docker socket and privately brokers label-gated container exec.
 
-The default host port is `4180` after installer confirmation. Nginx container port `80` serves Nestbox and OpenCode through host-based routing. Nginx container port `8080` is only the internal Nchan publisher. The native runner enters `control` with `docker compose exec -T` and uses a versioned stdio bridge to its loopback-only API. No other service publishes a host port.
+The default host port is `4180` after installer confirmation. Nginx container port `80` serves Nestbox and OpenCode through host-based routing. Nginx container port `8080` is only the internal Nchan publisher. No other service publishes a host port, and no background host runner is required.
 
 Important files:
 
@@ -293,7 +291,7 @@ You may edit Compose files, Dockerfiles, Nginx configuration, PHP configuration,
 
 1. Validate every part that can be checked inside this container.
 2. Identify the exact affected services.
-3. Use a declared host npm script through MCP when one exists; otherwise give the user the narrowest host-side command.
+3. Give the user the narrowest host-side command for activation.
 4. State that activation and host health checks remain pending.
 5. Tell the user to reconnect if OpenCode itself must restart.
 

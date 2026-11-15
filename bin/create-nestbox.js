@@ -14,8 +14,6 @@ const copyEntries = [
   'docker',
   'home',
   'tests',
-  'host-runner.mjs',
-  'package.host.json',
   'docker-compose.yaml',
   '.dockerignore',
   '.env.example',
@@ -171,57 +169,6 @@ async function configureInstance(installDir, workspaceDir, layout) {
   await writeFile(instancePath, instance, 'utf8');
 }
 
-function hostScripts(layout) {
-  const prefix = layout === 'nestbox' ? '.nestbox/' : '';
-  return {
-    host: `node ${prefix}host-runner.mjs`,
-    'test:host': `node ${prefix}tests/host-runner.mjs`
-  };
-}
-
-async function readWorkspacePackage(workspaceDir) {
-  const path = join(workspaceDir, 'package.json');
-  if (!(await pathExists(path))) return null;
-  let document;
-  try {
-    document = JSON.parse(await readFile(path, 'utf8'));
-  } catch (error) {
-    throw new Error(`Cannot use workspace package.json: ${error.message}`);
-  }
-  if (!document || typeof document !== 'object' || Array.isArray(document)) {
-    throw new Error('Workspace package.json must contain a JSON object.');
-  }
-  if (document.scripts !== undefined && (!document.scripts || typeof document.scripts !== 'object' || Array.isArray(document.scripts))) {
-    throw new Error('Workspace package.json scripts must be an object.');
-  }
-  return document;
-}
-
-async function preflightHostPackage(workspaceDir, layout) {
-  const document = await readWorkspacePackage(workspaceDir);
-  if (!document) return;
-  for (const [name, command] of Object.entries(hostScripts(layout))) {
-    if (document.scripts?.[name] !== undefined && document.scripts[name] !== command) {
-      throw new Error(`Refusing to overwrite existing workspace npm script: ${name}`);
-    }
-  }
-}
-
-async function configureHostPackage(installDir, workspaceDir, layout) {
-  const scripts = hostScripts(layout);
-  const document = await readWorkspacePackage(workspaceDir) || {
-    name: 'nestbox-workspace',
-    private: true
-  };
-  document.scripts = { ...(document.scripts || {}), ...scripts };
-  await writeFile(join(workspaceDir, 'package.json'), `${JSON.stringify(document, null, 2)}\n`, 'utf8');
-  await writeFile(join(installDir, 'package.host.json'), `${JSON.stringify({
-    name: 'nestbox-workspace',
-    private: true,
-    scripts
-  }, null, 2)}\n`, 'utf8');
-}
-
 function commandExists(command) {
   const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
   return result.status === 0;
@@ -258,12 +205,9 @@ async function main() {
       throw new Error(`Refusing to overwrite non-empty installation target: ${installDir}`);
     }
 
-    await preflightHostPackage(workspaceDir, layoutInput);
-
     await mkdir(installDir, { recursive: true });
     await copyTemplate(installDir);
     await configureInstance(installDir, workspaceDir, layoutInput);
-    await configureHostPackage(installDir, workspaceDir, layoutInput);
     const gitInitialized = options.git ? initGit(installDir) : false;
 
     console.log('\nNestbox project created.');
@@ -275,9 +219,6 @@ async function main() {
     console.log('  Edit .env and set COMPOSE_PROJECT_NAME, WEB_PORT, OpenCode credentials, and provider keys.');
     console.log('  docker compose config --quiet');
     console.log('  docker compose up -d --build');
-    console.log(`  cd ${workspaceDir}`);
-    console.log('  npm run host --');
-    console.log(`  cd ${installDir}`);
     console.log(process.platform === 'win32' ? '  .\\tests\\nestbox.ps1' : '  bash tests/nestbox.sh');
   } finally {
     rl.close();

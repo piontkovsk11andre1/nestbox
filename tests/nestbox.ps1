@@ -119,9 +119,9 @@ try {
     if ($openCodeInstance.Contains('Commit policy:')) { Pass 'OpenCode instance policy records commit behavior' } else { Fail 'OpenCode instance policy omits commit behavior' }
     if ($openCodeInstance.Contains('Communication language:')) { Pass 'OpenCode instance policy records communication language' } else { Fail 'OpenCode instance policy omits communication language' }
     $openCodeConfig = [IO.File]::ReadAllText((Join-Path $Root 'home\configs\opencode\opencode.json'))
-    if ($openCodeConfig.Contains('"instance.md"')) { Pass 'OpenCode loads instance policy directly' } else { Fail 'OpenCode does not load instance policy' }
+    if ($openCodeConfig.Contains('"/etc/opencode/instance.md"')) { Pass 'OpenCode loads instance policy directly' } else { Fail 'OpenCode does not load instance policy' }
     if ($openCodeConfig.Contains('"control"')) { Pass 'OpenCode registers the control MCP' } else { Fail 'OpenCode does not register the control MCP' }
-    if ((Test-Path -LiteralPath (Join-Path $Root 'docker\control\server.py')) -and (Test-Path -LiteralPath (Join-Path $Root 'docker\control\host_bridge.py')) -and (Test-Path -LiteralPath (Join-Path $Root 'host-runner.mjs'))) { Pass 'Control and host runner sources exist' } else { Fail 'Control or host runner source is missing' }
+    if ((Test-Path -LiteralPath (Join-Path $Root 'docker\control\server.py')) -and (Test-Path -LiteralPath (Join-Path $Root 'home\configs\opencode\control-mcp.js'))) { Pass 'Container control sources exist' } else { Fail 'Container control source is missing' }
 
     $result = Invoke-Compose @('config', '--quiet') -Quiet
     if ($result.Code -eq 0) { Pass 'Compose configuration is valid' } else { Fail 'Compose configuration is invalid' }

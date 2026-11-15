@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Remove native host npm execution, npm script confirmation tools, the host runner, its stdio bridge, and the loopback job API. Keep label-gated container execution and structured control logs.
+- Stop creating or modifying workspace package manifests during installation. Remove package.json-specific bind mounts and the control service's workspace mount.
+- Run the installed runtime entirely in Docker; host Node.js is needed only when using the npm creator.
+- Load OpenCode instructions and instance policy by absolute `/etc/opencode` paths, incorporating Gitea fix `4d53e89`.
+- See `INSTALL.md` for existing-installation cleanup and activation steps.
+
 ## 0.5.0
 
 - Replace the public token-authenticated host API with a persistent `docker compose exec -T control` stdio bridge.

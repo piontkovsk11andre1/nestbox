@@ -59,12 +59,6 @@ services:
         target: /workspace
         bind:
           create_host_path: false
-      - type: bind
-        source: ${WORKSPACE_PATH:-.}/package.json
-        target: /workspace/package.json
-        read_only: true
-        bind:
-          create_host_path: false
     environment:
       # Event publication and OpenCode automation stay inside Compose.
       - NESTBOX_BUS_PUBLISH_URL=http://nginx:8080/_nestbox/publish
@@ -106,7 +100,7 @@ services:
       - nestbox.exec.allow-target=true
     restart: unless-stopped
 
-  # Private, label-gated bridge for container exec and native host npm jobs.
+  # Private, label-gated API for container exec.
   # This is the only Nestbox service with access to the host Docker socket.
   control:
     build:
@@ -116,12 +110,6 @@ services:
       - "4088"
     volumes:
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
-      - type: bind
-        source: ${WORKSPACE_PATH:-.}
-        target: /workspace
-        read_only: true
-        bind:
-          create_host_path: false
     environment:
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
       - NESTBOX_CONTROL_SERVICE=control
@@ -173,12 +161,6 @@ services:
         target: /workspace
         bind:
           create_host_path: false
-      - type: bind
-        source: ${WORKSPACE_PATH:-.}/package.json
-        target: /workspace/package.json
-        read_only: true
-        bind:
-          create_host_path: false
       # The entrypoint fixes this volume's ownership before dropping privileges.
       - opencode-data:/home/nestbox/.local/share/opencode
     working_dir: /workspace
@@ -188,7 +170,6 @@ services:
     labels:
       - nestbox.exec.allow-source=true
       - nestbox.exec.targets=php-fpm,rollup
-      - nestbox.npm.allow=true
     restart: unless-stopped
 
 volumes:
