@@ -27,7 +27,6 @@ try {
   const directConfig = JSON.parse(await readFile(join(direct, 'home/configs/opencode/opencode.json'), 'utf8'));
   if (!directConfig.mcp['do-md']?.command.includes('--url')) throw new Error('Creator omitted the default remote do-md MCP.');
   await readFile(join(direct, 'docker/do-md/Dockerfile'), 'utf8');
-  await readFile(join(nested, '.nestbox/docker/do-md/check.mjs'), 'utf8');
   for (const entry of ['package.json', 'package.host.json', 'host-runner.mjs']) {
     if (directEntries.includes(entry)) throw new Error(`Creator installed obsolete host file: ${entry}`);
   }

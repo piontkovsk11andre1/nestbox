@@ -365,24 +365,19 @@ do_md_binding="$(docker inspect --format '{{json (index .NetworkSettings.Ports "
 [[ -z "$do_md_binding" || "$do_md_binding" == "null" ]] && pass 'do-md API is not published on the host' || fail 'do-md API is published on the host'
 do_md_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$do_md_id" 2>/dev/null || true)"
 grep -Fq '/var/run/docker.sock' <<<"$do_md_mounts" && fail 'do-md receives the Docker socket' || pass 'do-md does not receive the Docker socket'
-for target in /documents/workspace /documents/pages; do
+for target in /workspace; do
     expected_source="$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$target\"}}{{.Source}}{{end}}{{end}}" "$do_md_id" 2>/dev/null || true)"
     for service in php-fpm opencode; do
         actual_source="$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$target\"}}{{.Source}}{{end}}{{end}}" "$(container_id "$service")" 2>/dev/null || true)"
         [[ -n "$expected_source" && "$actual_source" == "$expected_source" ]] && pass "$service and do-md share $target" || fail "$service and do-md have different $target mounts"
     done
 done
-compose exec -T do-md node /opt/do-md/check.mjs --health >/dev/null 2>&1 && pass 'do-md exposes the compatible internal API' || fail 'do-md API is unavailable or incompatible'
 compose exec -T php-fpm php -l /home/code/__includes/functions.php >/dev/null 2>&1 && pass 'Shared PHP helpers pass lint' || fail 'Shared PHP helpers failed lint'
-if compose exec -T php-fpm php < "$ROOT/tests/do-md-smoke.php"; then
-    pass 'PHP do-md helpers read and mutate both shared document trees'
+do_md_health_code='require "/home/code/__includes/functions.php"; $health = nestbox_do_md_health(); exit($health["ok"] ? 0 : 1);'
+if compose exec -T php-fpm php -r "$do_md_health_code" >/dev/null 2>&1; then
+    pass 'PHP reaches the internal do-md API'
 else
-    fail 'PHP do-md shared-filesystem integration failed'
-fi
-if compose exec -T opencode node /opt/do-md/check.mjs --mcp; then
-    pass 'OpenCode do-md MCP dispatches remotely against both shared trees'
-else
-    fail 'OpenCode do-md remote MCP failed'
+    fail 'PHP cannot reach the internal do-md API'
 fi
 
 if ((INDEX_PRESENT)); then

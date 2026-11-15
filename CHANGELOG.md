@@ -3,10 +3,10 @@
 ## 0.7.0
 
 - Include do-md as a default internal service and configure OpenCode's do-md MCP for remote HTTP execution.
-- Share workspace and page files through `/documents/workspace` and `/documents/pages` in PHP, OpenCode, and do-md, including external page-tree overrides.
-- Install `@p10i/do-md@latest` in the backend and proxy images, with build/API compatibility checks, matched runtime ownership, health dependencies, and no additional published port.
+- Use the same `/workspace` mount in PHP, OpenCode, and do-md; default MCP and PHP document paths require no translation.
+- Install `@p10i/do-md@latest` in the backend and proxy images, with matched runtime ownership, API health dependencies, and no additional published port.
 - Add bounded, non-retrying PHP HTTP helpers for all eight document/reference operations, health, and capabilities.
-- Add real PHP/HTTP/MCP publisher tests and shared-mount checks to both host smoke suites; document activation and the default 20-second deadline.
+- Check the shared workspace mount and PHP-to-do-md health in both host smoke suites; document activation and the default 20-second deadline.
 
 ## 0.6.0
 

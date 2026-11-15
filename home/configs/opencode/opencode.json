@@ -8,7 +8,7 @@
   "mcp": {
     "do-md": {
       "type": "local",
-      "command": ["do-md-mcp", "--url", "{env:NESTBOX_DO_MD_URL}", "--root", "/documents", "--timeout-ms", "{env:NESTBOX_DO_MD_TIMEOUT_MS}"],
+      "command": ["do-md-mcp", "--url", "{env:NESTBOX_DO_MD_URL}", "--root", "/workspace", "--timeout-ms", "{env:NESTBOX_DO_MD_TIMEOUT_MS}"],
       "enabled": true
     },
     "control": {
@@ -25,7 +25,6 @@
     "external_directory": {
       "*": "ask",
       "/nestbox/**": "allow",
-      "/documents/**": "allow",
       "/workspace/**": "allow"
     }
   }

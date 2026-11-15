@@ -18,7 +18,7 @@ Control emits bounded structured events to ordinary container logs. Use `docker 
 
 ## Runtime Versions And Updates
 
-The do-md service and OpenCode image install `@p10i/do-md@latest` during builds. Package checks require do-md 1.4.0 or newer with HTTP API v1 and all eight document/reference operations. OpenCode runs its stdio MCP proxy in remote-dispatch mode; execution happens in the do-md service, without a host npm runner.
+The do-md service and OpenCode image install `@p10i/do-md@latest` during builds. This integration uses do-md 1.4.0+ and HTTP API v1. OpenCode runs its stdio MCP proxy in remote-dispatch mode; execution happens in the do-md service, without a host npm runner.
 
 Nestbox tracks the latest stable container images by default: OpenCode and Composer use `latest`, Alpine uses `latest`, and Node, Python, and PHP use their rolling Alpine variants. Alpine-installed tools use the newest packages available in the base image's configured repositories; OpenCode's PHP CLI selects the newest available PHP branch. These repositories can lag upstream releases, so verify the resulting PHP CLI and FPM versions after a refresh.
 
@@ -38,28 +38,30 @@ Reconnect to OpenCode after recreation, then run `bash tests/nestbox.sh` or `.\t
 
 The default `do-md` MCP supports `validate`, `export`, `create`, `set`, `render`, `match`, `query`, and `reference`. Its reference resources describe the executing remote version. PHP calls the same backend at `http://do-md:8080`; the API is internal-only and has no Nginx route or published host port.
 
-PHP-FPM, OpenCode, and do-md share these writable aliases in both installation layouts:
+PHP-FPM, OpenCode, and do-md all mount the same host project directory at **`/workspace`**. The do-md server root, OpenCode MCP root, and default PHP helper directory are all `/workspace`. A project file has the same absolute path in every caller; relative MCP paths resolve from `/workspace`.
 
-| Path | Contents |
+Page files remain at their existing PHP path `/home/code` and agent path `/nestbox/home/code`. For do-md, address them through the workspace:
+
+| Installation layout | Default page path within do-md |
 | --- | --- |
-| `/documents/workspace` | The same host workspace as `/workspace` |
-| `/documents/pages` | The page tree selected by `NESTBOX_PAGE_PATH`, including external overrides |
+| Direct installation | `/workspace/home/code` |
+| `.nestbox` installation | `/workspace/.nestbox/home/code` |
 
-The server root is `/documents`. MCP file arguments can use `workspace/project/notes.md` or `pages/report.md`; PHP can select a narrower directory and use relative names. Existing `/workspace`, `/home/code`, and `/nestbox/home/code` paths keep their normal purpose. There is no file copy or synchronization step.
+An external page tree outside the workspace is not automatically available to do-md. If it needs document operations, explicitly mount it at an agreed `/workspace/<path>` in PHP, OpenCode, and do-md. There is no separate document namespace or synchronization step.
 
 Shared PHP helpers are loaded automatically in super-documents:
 
 ```php
 $result = nestbox_do_md_export(
     ['file' => 'notes.md', 'template' => 'notes.tpl.md'],
-    directory: '/documents/workspace/project',
+    directory: '/workspace/project',
 );
 if ($result['ok']) {
     $context = $result['context'];
 }
 ```
 
-The default set is `nestbox_do_md_validate`, `nestbox_do_md_export`, `nestbox_do_md_create`, `nestbox_do_md_set`, `nestbox_do_md_render`, `nestbox_do_md_match`, `nestbox_do_md_query`, and `nestbox_do_md_reference`. Each accepts `(array $params, string $directory = '/documents/workspace', array $limits = [])`; reference also defaults to empty params. Parameter names match the do-md API, including inline `data`/`patch` objects, `savePath`, and `dryRun`.
+The default set is `nestbox_do_md_validate`, `nestbox_do_md_export`, `nestbox_do_md_create`, `nestbox_do_md_set`, `nestbox_do_md_render`, `nestbox_do_md_match`, `nestbox_do_md_query`, and `nestbox_do_md_reference`. Each accepts `(array $params, string $directory = '/workspace', array $limits = [])`; reference also defaults to empty params. Parameter names match the do-md API, including inline `data`/`patch` objects, `savePath`, and `dryRun`.
 
 `nestbox_do_md($command, $params, $directory, $limits)` is the generic operation helper. `nestbox_do_md_health()` and `nestbox_do_md_capabilities()` inspect the service, and `nestbox_do_md_request()` returns `['status' => ..., 'body' => ...]` for bounded low-level requests. Operation helpers return structured command failures, including HTTP deadline/busy diagnostics; network failures and invalid responses throw. Requests are never automatically retried because a write may already have committed.
 
@@ -67,7 +69,7 @@ The default execution deadline is 20 seconds (`NESTBOX_DO_MD_TIMEOUT_MS`), with 
 
 ## Source Verification
 
-For package development, use Node 20+, Python 3, and PHP, then run `npm ci`, `npm test`, and `npm run prepack`. The dev-only do-md dependency runs real HTTP/PHP/MCP integration tests; it is not a host runtime requirement. Installed applications use the Bash or PowerShell host smoke suite, which checks actual container mounts, PHP operations, and remote MCP with unique private fixtures that are removed afterward.
+For package development, run `npm test` and `npm run prepack` with Node.js and Python 3 available. Lint changed PHP files with `php -l`. Installed applications use the Bash or PowerShell host smoke suite to check container status, shared workspace mounts, and PHP access to the do-md API.
 
 ## Learn More
 

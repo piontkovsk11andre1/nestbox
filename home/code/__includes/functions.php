@@ -303,7 +303,7 @@ function nestbox_do_md_capabilities(): array
 }
 
 /** Execute one scoped operation; return domain/HTTP diagnostics, throw on transport errors. */
-function nestbox_do_md(string $command, array $params = [], string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md(string $command, array $params = [], string $directory = '/workspace', array $limits = []): array
 {
     if (!in_array($command, ['validate', 'export', 'create', 'set', 'render', 'match', 'query', 'reference'], true)) {
         throw new InvalidArgumentException('Unknown do-md command.');
@@ -364,49 +364,49 @@ function nestbox_do_md(string $command, array $params = [], string $directory = 
 }
 
 /** Validate a document through the shared do-md backend. */
-function nestbox_do_md_validate(array $params, string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_validate(array $params, string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('validate', $params, $directory, $limits);
 }
 
 /** Export context inline or to the optional server-side savePath. */
-function nestbox_do_md_export(array $params, string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_export(array $params, string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('export', $params, $directory, $limits);
 }
 
 /** Create Markdown inline or at the optional server-side file. */
-function nestbox_do_md_create(array $params, string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_create(array $params, string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('create', $params, $directory, $limits);
 }
 
 /** Apply a document mutation; dryRun returns output without writing. */
-function nestbox_do_md_set(array $params, string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_set(array $params, string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('set', $params, $directory, $limits);
 }
 
 /** Parse and render with two templates, optionally without writing. */
-function nestbox_do_md_render(array $params, string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_render(array $params, string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('render', $params, $directory, $limits);
 }
 
 /** Find full-document template matches inside the selected directory. */
-function nestbox_do_md_match(array $params, string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_match(array $params, string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('match', $params, $directory, $limits);
 }
 
 /** Find partial-document regions inside the selected directory. */
-function nestbox_do_md_query(array $params, string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_query(array $params, string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('query', $params, $directory, $limits);
 }
 
 /** Read the executing version's reference or one function entry. */
-function nestbox_do_md_reference(array $params = [], string $directory = '/documents/workspace', array $limits = []): array
+function nestbox_do_md_reference(array $params = [], string $directory = '/workspace', array $limits = []): array
 {
     return nestbox_do_md('reference', $params, $directory, $limits);
 }

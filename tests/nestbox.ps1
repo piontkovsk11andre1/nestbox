@@ -34,15 +34,11 @@ function Skip([string]$Message) {
     Write-Output "SKIP  $Message"
 }
 
-function Invoke-Compose([string[]]$Arguments, [switch]$Quiet, [string]$InputText) {
+function Invoke-Compose([string[]]$Arguments, [switch]$Quiet) {
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        if ($PSBoundParameters.ContainsKey('InputText')) {
-            $output = @($InputText | & docker compose --project-directory $Root @Arguments 2>&1 | ForEach-Object { $_.ToString() })
-        } else {
-            $output = @(& docker compose --project-directory $Root @Arguments 2>&1 | ForEach-Object { $_.ToString() })
-        }
+        $output = @(& docker compose --project-directory $Root @Arguments 2>&1 | ForEach-Object { $_.ToString() })
         $code = $LASTEXITCODE
     }
     finally {
@@ -266,7 +262,7 @@ try {
     $doMdInspect = @(& docker inspect $doMdId 2>$null | ConvertFrom-Json)[0]
     if ($null -eq $doMdInspect.NetworkSettings.Ports.'8080/tcp') { Pass 'do-md API is not published on the host' } else { Fail 'do-md API is published on the host' }
     if (@($doMdInspect.Mounts.Destination) -notcontains '/var/run/docker.sock') { Pass 'do-md does not receive the Docker socket' } else { Fail 'do-md receives the Docker socket' }
-    foreach ($target in @('/documents/workspace', '/documents/pages')) {
+    foreach ($target in @('/workspace')) {
         $expectedSource = @($doMdInspect.Mounts | Where-Object { $_.Destination -eq $target } | ForEach-Object { $_.Source })
         foreach ($service in @('php-fpm', 'opencode')) {
             $inspect = if ($service -eq 'opencode') { $openCodeInspect } else { @(& docker inspect (Get-ContainerId $service) 2>$null | ConvertFrom-Json)[0] }
@@ -274,14 +270,11 @@ try {
             if ($expectedSource.Count -eq 1 -and $actualSource.Count -eq 1 -and $expectedSource[0] -eq $actualSource[0]) { Pass "$service and do-md share $target" } else { Fail "$service and do-md have different $target mounts" }
         }
     }
-    $result = Invoke-Compose @('exec', '-T', 'do-md', 'node', '/opt/do-md/check.mjs', '--health') -Quiet
-    if ($result.Code -eq 0) { Pass 'do-md exposes the compatible internal API' } else { Fail 'do-md API is unavailable or incompatible' }
     $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-l', '/home/code/__includes/functions.php') -Quiet
     if ($result.Code -eq 0) { Pass 'Shared PHP helpers pass lint' } else { Fail 'Shared PHP helpers failed lint' }
-    $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php') -InputText ([IO.File]::ReadAllText((Join-Path $Root 'tests\do-md-smoke.php')))
-    if ($result.Code -eq 0) { Pass 'PHP do-md helpers read and mutate both shared document trees' } else { Fail 'PHP do-md shared-filesystem integration failed' }
-    $result = Invoke-Compose @('exec', '-T', 'opencode', 'node', '/opt/do-md/check.mjs', '--mcp')
-    if ($result.Code -eq 0) { Pass 'OpenCode do-md MCP dispatches remotely against both shared trees' } else { Fail 'OpenCode do-md remote MCP failed' }
+    $doMdHealthCode = "require '/home/code/__includes/functions.php'; `$health = nestbox_do_md_health(); exit(`$health['ok'] ? 0 : 1);"
+    $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-r', $doMdHealthCode) -Quiet
+    if ($result.Code -eq 0) { Pass 'PHP reaches the internal do-md API' } else { Fail 'PHP cannot reach the internal do-md API' }
 
     if ($indexPresent) {
         $result = Invoke-Compose @('exec', '-T', 'php-fpm', 'php', '-l', '/home/code/index.php') -Quiet

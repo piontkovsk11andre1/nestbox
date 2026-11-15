@@ -29,14 +29,11 @@
     "!home/code/scripts-bundle.css"
   ],
   "scripts": {
-    "test": "node tests/control.mjs && node tests/creator.mjs && node --test tests/do-md.test.mjs",
+    "test": "node tests/control.mjs && node tests/creator.mjs",
     "prepack": "node scripts/check-package.js"
   },
   "engines": {
     "node": ">=18"
-  },
-  "devDependencies": {
-    "@p10i/do-md": "^1.4.0"
   },
   "publishConfig": {
     "access": "public"

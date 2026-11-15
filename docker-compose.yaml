@@ -61,17 +61,6 @@ services:
         target: /workspace
         bind:
           create_host_path: false
-      # The same bounded document namespace is shared with OpenCode and do-md.
-      - type: bind
-        source: ${WORKSPACE_PATH:-.}
-        target: /documents/workspace
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${NESTBOX_PAGE_PATH:-./home/code}
-        target: /documents/pages
-        bind:
-          create_host_path: false
     environment:
       # Event publication and OpenCode automation stay inside Compose.
       - NESTBOX_BUS_PUBLISH_URL=http://nginx:8080/_nestbox/publish
@@ -116,29 +105,24 @@ services:
     restart: unless-stopped
 
   # Shared Markdown execution backend. No host port, Docker socket, or secrets
-  # environment; documents persist only in the existing workspace/page mounts.
+  # environment; it uses the same /workspace mount as PHP and OpenCode.
   do-md:
     build:
       context: .
       dockerfile: ./docker/do-md/Dockerfile
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
-    working_dir: /documents
-    command: ["serve", "--root", "/documents", "--host", "0.0.0.0", "--port", "8080", "--timeout-ms", "${NESTBOX_DO_MD_TIMEOUT_MS:-20000}"]
+    working_dir: /workspace
+    command: ["serve", "--root", "/workspace", "--host", "0.0.0.0", "--port", "8080", "--timeout-ms", "${NESTBOX_DO_MD_TIMEOUT_MS:-20000}"]
     expose:
       - "8080"
     volumes:
       - type: bind
         source: ${WORKSPACE_PATH:-.}
-        target: /documents/workspace
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${NESTBOX_PAGE_PATH:-./home/code}
-        target: /documents/pages
+        target: /workspace
         bind:
           create_host_path: false
     healthcheck:
-      test: ["CMD", "node", "/opt/do-md/check.mjs", "--health"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(async r => { const h = await r.json(); if (!r.ok || !h.ok || h.apiVersion !== 1) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -212,16 +196,6 @@ services:
       - type: bind
         source: ${WORKSPACE_PATH:-.}
         target: /workspace
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${WORKSPACE_PATH:-.}
-        target: /documents/workspace
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${NESTBOX_PAGE_PATH:-./home/code}
-        target: /documents/pages
         bind:
           create_host_path: false
       # The entrypoint fixes this volume's ownership before dropping privileges.

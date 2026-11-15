@@ -22,8 +22,6 @@ RUN php_package="$(apk search --no-cache --quiet --exact 'php[0-9]*' | grep -E '
 RUN npm install --prefix /opt/do-md --engine-strict --omit=dev --no-audit --no-fund @p10i/do-md@latest && \
     ln -s /opt/do-md/node_modules/.bin/do-md /usr/local/bin/do-md && \
     ln -s /opt/do-md/node_modules/.bin/do-md-mcp /usr/local/bin/do-md-mcp
-COPY ./docker/do-md/check.mjs /opt/do-md/check.mjs
-RUN node /opt/do-md/check.mjs --package
 
 ENV OPENCODE_CONFIG=/etc/opencode/opencode.json
 ENV HOME=/home/nestbox

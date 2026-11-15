@@ -10,9 +10,7 @@ Read the separately loaded `instance.md` before responding or authoring UI. Use 
 
 ## Locations And Ownership
 
-- `/workspace` is the user's project workspace.
-- `/documents/workspace` aliases that workspace in PHP, OpenCode, and do-md.
-- `/documents/pages` aliases the selected page tree in those same services.
+- `/workspace` is the user's project workspace, mounted at the same path in PHP, OpenCode, and do-md.
 - `/nestbox` is the Nestbox engine installation.
 - `/nestbox/home/code` is the writable page tree containing super-documents and shared browser source.
 - `/home/code` is the same page tree at its PHP and asset-runtime path and is read-only in this container.
@@ -186,11 +184,11 @@ The control log is the audit source of truth and requires no observability servi
 
 The default enabled `do-md` MCP runs as a local stdio proxy and dispatches HTTP requests to `http://do-md:8080`. Use it for validate, export, create, set, render, match, query, and reference operations. The backend executes in the `do-md` container, not this one. Reference resources describe the remote version. Do not replace this entry with local execution or fall back to a local command when the service fails.
 
-The backend root is `/documents`. Use `workspace/project/file.md` for project files and `pages/report.md` for page-tree files in MCP arguments. PHP, OpenCode, and do-md mount the same host sources at `/documents/workspace` and `/documents/pages`, including when `NESTBOX_PAGE_PATH` selects an external directory. Existing authoring paths retain their role; these aliases do not change Git ownership or public HTTP routes. Additional do-md document trees must be mounted under identical `/documents/<name>` paths in all three services.
+The backend and MCP roots are `/workspace`, matching the same workspace mount in PHP and OpenCode. Use `project/file.md` or `/workspace/project/file.md` in MCP arguments. Default page files are reachable at `/workspace/home/code` in the direct layout and `/workspace/.nestbox/home/code` in the nested layout. `/home/code` and `/nestbox/home/code` retain their PHP/authoring roles but are not do-md roots. An external page tree outside the workspace is not implicitly available to do-md; if needed, explicitly mount it at the same agreed `/workspace/<path>` in all three services. These paths do not change Git ownership or public routes.
 
 Super-documents automatically have the shared helpers from `__includes/functions.php`:
 
-- `nestbox_do_md($command, $params = [], $directory = '/documents/workspace', $limits = [])` executes a command and returns its API-v1 Result.
+- `nestbox_do_md($command, $params = [], $directory = '/workspace', $limits = [])` executes a command and returns its API-v1 Result.
 - `nestbox_do_md_validate`, `nestbox_do_md_export`, `nestbox_do_md_create`, `nestbox_do_md_set`, `nestbox_do_md_render`, `nestbox_do_md_match`, `nestbox_do_md_query`, and `nestbox_do_md_reference` accept params, directory, and limits with the same defaults. Reference permits empty params.
 - `nestbox_do_md_health()` and `nestbox_do_md_capabilities()` inspect the service.
 - `nestbox_do_md_request()` is the bounded transport primitive returning HTTP status and decoded body.
@@ -222,7 +220,7 @@ The default Compose application has six services:
 - `rollup`: watches `scripts.js` and browser dependencies and writes local JS/CSS bundles into the page tree.
 - `opencode`: runs this agent, mounts the engine and workspace, and edits the page tree through `/nestbox/home/code`.
 - `control`: owns the Docker socket and privately brokers label-gated container exec.
-- `do-md`: serves the shared Markdown HTTP API and executes OpenCode MCP/PHP document operations against the common `/documents` mounts.
+- `do-md`: serves the shared Markdown HTTP API and executes OpenCode MCP/PHP document operations against the same `/workspace` mount.
 
 The default host port is `4180` after installer confirmation. Nginx container port `80` serves Nestbox and OpenCode through host-based routing. Nginx container port `8080` is only the internal Nchan publisher. No other service publishes a host port, and no background host runner is required.
 
@@ -340,7 +338,7 @@ Do not request `docker compose down`, volume deletion, orphan removal, or destru
 - Let Rollup rebuild shared browser source, then check generated output.
 - Confirm every `__*` HTTP and CLI route remains inaccessible.
 - For PHP-to-OpenCode changes, verify `/global/health` through `nestbox_opencode_request()` before creating real sessions.
-- For do-md integration changes, verify capabilities, PHP operations, and remote MCP through both shared document aliases using the host smoke suite. Keep its private fixtures scoped and clean them up. Rebuild `do-md` and `opencode` together when refreshing their rolling tool installation, recreate PHP for mount/environment changes, and reconnect to OpenCode.
+- For do-md integration changes, verify the common `/workspace` mount, API health, and OpenCode's remote MCP connection. Rebuild `do-md` and `opencode` together when refreshing their rolling tool installation, recreate affected services for mount/environment changes, and reconnect to OpenCode.
 - For event changes, verify publication and EventSource behavior without placing sensitive data in events.
 - For infrastructure changes, report `docker compose config`, image builds, container recreation, and host health checks as pending when they cannot run here.
 - Ask the host maintainer to run `tests/nestbox.sh` or `tests/nestbox.ps1` after installation or infrastructure changes.
