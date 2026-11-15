@@ -137,7 +137,7 @@ try {
     }
 
     if ($Start) {
-        $result = Invoke-Compose @('build', 'nginx', 'php-fpm', 'rollup', 'control', 'opencode')
+        $result = Invoke-Compose @('build', '--pull', '--no-cache', 'nginx', 'php-fpm', 'rollup', 'control', 'opencode')
         if ($result.Code -eq 0) { Pass 'All service images build' } else { Fail 'One or more service images failed to build' }
 
         # Do not start the bind-mounted Rollup watcher: it intentionally writes

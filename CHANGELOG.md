@@ -2,6 +2,7 @@
 
 ## 0.6.0
 
+- Consistently track latest-stable runtime images, dynamically select Alpine's newest PHP CLI branch, and document fresh builds with `--pull --no-cache`.
 - Remove native host npm execution, npm script confirmation tools, the host runner, its stdio bridge, and the loopback job API. Keep label-gated container execution and structured control logs.
 - Stop creating or modifying workspace package manifests during installation. Remove package.json-specific bind mounts and the control service's workspace mount.
 - Run the installed runtime entirely in Docker; host Node.js is needed only when using the npm creator.

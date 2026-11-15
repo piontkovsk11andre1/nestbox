@@ -1,4 +1,4 @@
-FROM python:3.12-alpine
+FROM python:alpine
 
 COPY ./docker/control/server.py /usr/local/bin/nestbox-control
 

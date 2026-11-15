@@ -186,7 +186,7 @@ while IFS= read -r service; do
 done <<<"$running_services"
 
 if ((START)); then
-    if compose build nginx php-fpm rollup control opencode; then
+    if compose build --pull --no-cache nginx php-fpm rollup control opencode; then
         pass 'All service images build'
     else
         fail 'One or more service images failed to build'

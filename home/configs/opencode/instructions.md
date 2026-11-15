@@ -194,6 +194,8 @@ The control log is the audit source of truth and requires no observability servi
 
 ## Container Architecture
 
+The package defaults to latest-stable container images and the latest system packages available in their configured repositories. Preserve this rolling policy unless the user explicitly requests pinning. Refresh images and package-install layers with `docker compose build --pull --no-cache` during host-side updates; running containers do not update themselves. Keep application library lockfiles authoritative. Verify the resulting PHP CLI and FPM versions, since Alpine packaging can lag upstream PHP.
+
 The default Compose application has five services:
 
 - `nginx`: the only host-published gateway. It serves static page files, routes super-documents to PHP-FPM, proxies the OpenCode virtual host, and hosts Nchan.
@@ -267,7 +269,7 @@ Choose one explicit integration mode:
 For every added service, decide and document:
 
 - Lifecycle owner.
-- Pinned image or build context.
+- Image tag or build context, following the package's latest-stable default unless pinning is explicitly requested.
 - Command and working directory.
 - Non-root user and host UID/GID behavior where practical.
 - Read-only and writable mounts.

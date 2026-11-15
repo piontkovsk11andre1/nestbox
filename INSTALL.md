@@ -16,7 +16,8 @@ The creator does not start Docker or collect secrets. Node.js and npm are needed
 
 ```sh
 docker compose config --quiet
-docker compose up -d --build
+docker compose build --pull --no-cache
+docker compose up -d
 ```
 
 Then run the host test suite documented in section 7.
@@ -117,7 +118,7 @@ Then ask about:
 - Linux UID and GID when bind-mount ownership matters;
 - additional directories required by PHP and OpenCode;
 - an optional reverse-proxy URL prefix;
-- rolling or pinned container images;
+- the default latest-stable image policy, with pinning only as an explicitly requested adaptation;
 - `NESTBOX_OPENCODE_PUBLIC_URL` when `agent.<nestbox-host>` cannot be derived.
 
 Open `.env` in a local editor for runtime settings and secrets. Never ask the user to paste provider keys into chat or print the completed file.
@@ -126,7 +127,9 @@ Before startup, query existing Docker containers with the proposed Compose proje
 
 For additional directories, mount the same host path at the same container path in PHP and OpenCode. Extend OpenCode's `external_directory` permission when unattended access is intended. Prefer read-only mounts unless writing is required.
 
-Keep PHP-FPM and OpenCode's PHP CLI on the same PHP version. For a path-prefixed reverse proxy, the outer proxy removes the prefix before forwarding and configures `NESTBOX_URL_PREFIX`. Set `NESTBOX_OPENCODE_PUBLIC_URL` explicitly whenever the public OpenCode scheme or host differs from direct Nestbox access.
+Nestbox defaults to rolling latest-stable image tags and the latest system packages available in their configured repositories. OpenCode selects the newest PHP branch available from Alpine; PHP-FPM follows the official rolling PHP image. Verify both runtime versions after each build because Alpine packaging can lag upstream PHP. Resolve any incompatible branch mismatch before handoff. Use `docker compose build --pull --no-cache` to refresh base images and cached package-install layers. Application library lockfiles remain authoritative and are updated separately.
+
+For a path-prefixed reverse proxy, the outer proxy removes the prefix before forwarding and configures `NESTBOX_URL_PREFIX`. Set `NESTBOX_OPENCODE_PUBLIC_URL` explicitly whenever the public OpenCode scheme or host differs from direct Nestbox access.
 
 ## 6. Keep The Public Page Tree Empty
 
@@ -140,7 +143,8 @@ Run from the installation directory:
 
 ```sh
 docker compose config --quiet
-docker compose up -d --build
+docker compose build --pull --no-cache
+docker compose up -d
 docker compose ps
 docker compose port nginx 80
 ```
@@ -272,7 +276,7 @@ Host npm execution and npm script confirmation tools have been removed. Containe
 
 ```sh
 docker compose config --quiet
-docker compose build control opencode
+docker compose build --pull --no-cache control opencode
 docker compose up -d control php-fpm opencode
 bash tests/nestbox.sh
 ```

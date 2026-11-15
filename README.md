@@ -16,6 +16,22 @@ Project commands run inside the appropriate container through `docker_exec`. Hos
 
 Control emits bounded structured events to ordinary container logs. Use `docker compose logs control`; no telemetry collector, database, or observability dependency is installed. Docker socket access is root-equivalent on the host, so this is a controlled capability, not a sandbox.
 
+## Runtime Versions And Updates
+
+Nestbox tracks the latest stable container images by default: OpenCode and Composer use `latest`, Alpine uses `latest`, and Node, Python, and PHP use their rolling Alpine variants. Alpine-installed tools use the newest packages available in the base image's configured repositories; OpenCode's PHP CLI selects the newest available PHP branch. These repositories can lag upstream releases, so verify the resulting PHP CLI and FPM versions after a refresh.
+
+Refresh images and installed system packages from the installation directory:
+
+```sh
+docker compose config --quiet
+docker compose build --pull --no-cache
+docker compose up -d
+docker compose exec -T php-fpm php --version
+docker compose exec -T opencode php --version
+```
+
+Reconnect to OpenCode after recreation, then run `bash tests/nestbox.sh` or `.\tests\nestbox.ps1`. Existing containers do not update automatically. JavaScript and PHP library dependencies continue to use their committed lockfiles; runtime refreshes do not rewrite those dependencies.
+
 ## Learn More
 
 Copy and send this to an agent with web access:

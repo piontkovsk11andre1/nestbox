@@ -10,8 +10,12 @@ FROM ghcr.io/anomalyco/opencode:latest
 ARG APP_UID=1000
 ARG APP_GID=1000
 
-RUN apk add --no-cache git nodejs php85 php85-dom php85-mbstring php85-openssl php85-phar php85-tokenizer php85-xml php85-xmlwriter su-exec && \
-    ln -s /usr/bin/php85 /usr/local/bin/php && \
+# Alpine names PHP packages by branch. Select its newest available branch
+# instead of retaining an older branch as the rolling base image advances.
+RUN php_package="$(apk search --no-cache --quiet --exact 'php[0-9]*' | grep -E '^php[0-9]+$' | sort -V | tail -n 1)" && \
+    test -n "$php_package" && \
+    apk add --no-cache git nodejs "$php_package" "$php_package-dom" "$php_package-mbstring" "$php_package-openssl" "$php_package-phar" "$php_package-tokenizer" "$php_package-xml" "$php_package-xmlwriter" su-exec && \
+    ln -s "/usr/bin/$php_package" /usr/local/bin/php && \
     addgroup -g "${APP_GID}" -S nestbox && \
     adduser -u "${APP_UID}" -G nestbox -S -h /home/nestbox nestbox
 

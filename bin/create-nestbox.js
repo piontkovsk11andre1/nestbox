@@ -218,7 +218,8 @@ async function main() {
     console.log(`  cd ${installDir}`);
     console.log('  Edit .env and set COMPOSE_PROJECT_NAME, WEB_PORT, OpenCode credentials, and provider keys.');
     console.log('  docker compose config --quiet');
-    console.log('  docker compose up -d --build');
+    console.log('  docker compose build --pull --no-cache');
+    console.log('  docker compose up -d');
     console.log(process.platform === 'win32' ? '  .\\tests\\nestbox.ps1' : '  bash tests/nestbox.sh');
   } finally {
     rl.close();
